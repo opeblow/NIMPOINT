@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Lint, typecheck, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: next-build
+          path: .next
+          include-hidden-files: true
+          retention-days: 1
+
+  e2e:
+    name: End-to-end (mock Nimiq node)
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      NIMIQ_RPC_URL: http://localhost:8648
+      AGENT_ADDRESS: NQ11 AAAA AAAA AAAA AAAA AAAA AAAA AAAA AAAA
+      AGENT_KEY: test-agent-key-123
+      AGENT_BANK_NAME: Moniepoint
+      AGENT_BANK_ACCOUNT: '9876543210'
+      AGENT_BANK_ACCOUNT_NAME: Yaba Agent
+      TELEGRAM_WEBHOOK_SECRET: ci-secret
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@v4
+        with:
+          name: next-build
+          path: .next
+      - name: Start mock Nimiq node and app
+        run: |
+          PORT=8648 node scripts/mock-nimiq.mjs &
+          npx next start -p 3100 &
+          npx --yes wait-on@8 http://localhost:3100/api/agents --timeout 60000
+      - run: APP=http://localhost:3100 RPC=http://localhost:8648 npm run test:e2e
