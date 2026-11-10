@@ -15,9 +15,9 @@ Cash out NIM to any Nigerian bank, or walk up to a NimPoint agent and leave with
 ![Three.js](https://img.shields.io/badge/React%20Three%20Fiber-3D-12130f?logo=threedotjs)
 ![Nimiq Pay](https://img.shields.io/badge/Nimiq%20Pay-Mini%20App-e9b213)
 ![Category](https://img.shields.io/badge/Cycle%203-On%2FOff--Ramp-0d7a4a)
-![E2E](https://img.shields.io/badge/e2e-41%20API%20%2B%2020%20UI%20checks-0d7a4a)
+![E2E](https://img.shields.io/badge/e2e-41%20API%20%2B%2028%20UI%20checks-0d7a4a)
 
-[Live app](https://YOUR-DEPLOYMENT.vercel.app) · [Live on-chain proof](https://YOUR-DEPLOYMENT.vercel.app/proof) · [Demo video](#) · [Become a NimPoint](https://YOUR-DEPLOYMENT.vercel.app/agent)
+[Live app](https://nimpoint.vercel.app) · [Live on-chain proof](https://nimpoint.vercel.app/proof) · [Demo video](#) · [Become a NimPoint](https://nimpoint.vercel.app/agent)
 
 </div>
 
@@ -81,6 +81,8 @@ All screenshots were taken in an emulated phone viewport (390×844 @2x) against 
 
 | | | |
 | :---: | :---: | :---: |
+| <img src="docs/screenshots/00-landing.png" width="240" /> | <img src="docs/screenshots/00-passcode.png" width="240" /> | <img src="docs/screenshots/13-desktop.png" width="240" /> |
+| **Landing.** What NimPoint is in one line, the 3D NimPoint coin, the live rate and live usage numbers. | **Passcode.** A 4-digit passcode like a banking app. Created once, then asked on every visit. Wrong tries are limited. | **Desktop preview.** On Mac or Windows the app shows a QR code that opens NimPoint inside Nimiq Pay. |
 | <img src="docs/screenshots/01-home.png" width="240" /> | <img src="docs/screenshots/02-amount.png" width="240" /> | <img src="docs/screenshots/03-method.png" width="240" /> |
 | **Home.** Live NIM→NGN rate, the 3D NimPoint coin and the connected Nimiq Pay wallet. | **Amount.** A big-thumb keypad (no system keyboard covering the screen). NIM needed is computed as you type. | **Bank or cash.** Remote bank payout, or cash in hand at a NimPoint stand. |
 | <img src="docs/screenshots/04-agent.png" width="240" /> | <img src="docs/screenshots/05-bank.png" width="240" /> | <img src="docs/screenshots/06-review.png" width="240" /> |
@@ -178,7 +180,8 @@ NimPoint **never holds funds**. It's a peer-to-peer marketplace, and the app say
 ```
 src/
 ├─ app/
-│  ├─ page.tsx                 Home + order flow (amount → method → agent → bank → review)
+│  ├─ page.tsx                 Landing page (returning users skip straight to the app)
+│  ├─ app/page.tsx             Passcode, then home + order flow (amount → method → agent → bank → review)
 │  ├─ o/[id]/page.tsx          Live order page (pay, pickup code, confirm, rate, dispute)
 │  ├─ agent/page.tsx           Agent console (Mini App page for agents)
 │  ├─ proof/page.tsx           Public on-chain proof
@@ -272,7 +275,7 @@ In a normal browser the app runs in **preview mode** and shows an "Open in Nimiq
 
 ## Deploy to production
 
-1. **Push to GitHub** (public, MIT).
+1. **Push to GitHub** (public, MIT). Live at **https://nimpoint.vercel.app**.
 2. **Import into Vercel** → Framework: Next.js. No build settings needed.
 3. **Add a database:** Vercel → Storage → Marketplace → **Upstash Redis** → connect to the project. This sets `KV_REST_API_URL` / `KV_REST_API_TOKEN`, which NimPoint reads automatically.
 4. **Set environment variables** from [`.env.example`](.env.example): at least `AGENT_ADDRESS`, `AGENT_KEY` (long and random), `AGENT_NAME`, `AGENT_AREA`, plus `AGENT_BANK_*` to accept bank top-ups.
@@ -316,7 +319,7 @@ Agents earn the spread (default 1.5%), shown to users before they pay.
 | --- | --- | --- |
 | Lint + types | ESLint (Next config), `tsc --noEmit` strict | `npm run lint && npm run typecheck` |
 | End-to-end API (41 checks) | Validation, cash-out, top-up, memo scan, serialized tx, replay protection, wrong memo, short payment, disputes, ratings, agent auth, Telegram auth, offline agents, proof counts | `npm run test:e2e` (with mock node + app running; see [CONTRIBUTING](CONTRIBUTING.md)) |
-| In-browser UI (20 checks) | Full cash-out, walk-up cash, top-up and agent flows clicked through in Chrome with an injected Nimiq Pay provider; 360×640 fit; no horizontal scroll; no double-pay on reload; desktop preview mode | Puppeteer script used to generate the screenshots |
+| In-browser UI (28 checks) | Landing, passcode create/confirm/unlock/wrong-code, full cash-out, walk-up cash, top-up and agent flows clicked through in Chrome with an injected Nimiq Pay provider; 360×640 fit; no horizontal scroll; no double-pay on reload; desktop preview mode | Puppeteer script used to generate the screenshots |
 | CI | Lint, typecheck, build and the full E2E suite on every push | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) |
 | CodeQL | Static security analysis weekly and on every PR | [`.github/workflows/codeql.yml`](.github/workflows/codeql.yml) |
 
@@ -329,6 +332,7 @@ Inspired by the clarity of top consumer fintech, built for Lagos:
 - **Logo:** an original mark, a gold location pin (a cash point near you) with the Naira double bar inside.
 - **3D:** a gold NimPoint coin in React Three Fiber, lit with studio light-formers generated in code (no HDR download inside the webview). Falls back to an SVG coin if WebGL is unavailable.
 - **Motion:** rolling digits, spring segmented controls, draggable bottom sheets, animated timeline. Enter-only page transitions so a throttled webview never shows a blank screen. `prefers-reduced-motion` respected.
+- **Passcode:** a 4-digit device passcode (SHA-256 hashed, stored only on the phone) protects the app on shared phones. Five wrong tries trigger a 30-second lock. "Forgot passcode" resets it; funds are never at risk because they stay in Nimiq Pay.
 - **Accessibility:** 16px+ inputs (no iOS zoom), 44px+ touch targets, ARIA labels on keypad, tabs, switches and ratings.
 
 ## Cross-platform support
