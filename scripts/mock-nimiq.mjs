@@ -9,6 +9,10 @@ const norm = (a) => a.replace(/\s+/g, '').toUpperCase();
 const port = Number(process.env.PORT ?? 8648);
 
 createServer(async (req, res) => {
+  // CORS so browser-based demos can talk to the mock directly.
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') return res.end();
   let body = '';
   for await (const c of req) body += c;
   const json = body ? JSON.parse(body) : {};
