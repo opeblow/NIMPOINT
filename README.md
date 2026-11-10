@@ -25,30 +25,42 @@ Cash out NIM to any Nigerian bank, or walk up to a NimPoint agent and leave with
 
 ## Table of contents
 
-- [NimPoint in one minute](#nimpoint-in-one-minute)
-- [How it fits Cycle III](#how-it-fits-cycle-iii)
-- [Demo video](#demo-video)
+**Start here**
 
-1. [The problem](#the-problem)
-2. [The idea](#the-idea)
-3. [What makes NimPoint different](#what-makes-nimpoint-different)
-4. [Screenshots](#screenshots)
-5. [How it works](#how-it-works)
-6. [Nimiq Pay integration](#nimiq-pay-integration)
-7. [Verifiable usage: the proof page](#verifiable-usage-the-proof-page)
-8. [Safety model](#safety-model)
-9. [Architecture](#architecture)
-10. [Order lifecycle](#order-lifecycle)
-11. [API reference](#api-reference)
-12. [Run it locally](#run-it-locally)
-13. [Deploy to production](#deploy-to-production)
-14. [Become an agent](#become-an-agent)
-15. [Testing](#testing)
-16. [Design system](#design-system)
-17. [Cross-platform support](#cross-platform-support)
-18. [Roadmap](#roadmap)
-19. [Contributing, security and privacy](#contributing-security-and-privacy)
-20. [License](#license)
+1. [NimPoint in one minute](#nimpoint-in-one-minute)
+2. [How it fits Cycle III](#how-it-fits-cycle-iii)
+3. [Demo video](#demo-video)
+
+**The idea**
+
+4. [The problem](#the-problem)
+5. [The idea](#the-idea)
+6. [What makes NimPoint different](#what-makes-nimpoint-different)
+7. [Screenshots](#screenshots)
+8. [How it works](#how-it-works)
+
+**Trust and proof**
+
+9. [Nimiq Pay integration](#nimiq-pay-integration)
+10. [Verifiable usage: the proof page](#verifiable-usage-the-proof-page)
+11. [Safety model](#safety-model)
+    - [Agent bonds](#agent-bonds)
+12. [Limits and open risks](#limits-and-open-risks)
+
+**For developers and operators**
+
+13. [Architecture](#architecture)
+14. [Order lifecycle](#order-lifecycle)
+15. [API reference](#api-reference)
+16. [Run it locally](#run-it-locally)
+17. [Deploy to production](#deploy-to-production)
+18. [Become an agent](#become-an-agent)
+19. [Testing](#testing)
+20. [Design system](#design-system)
+21. [Cross-platform support](#cross-platform-support)
+22. [Roadmap](#roadmap)
+23. [Contributing, security and privacy](#contributing-security-and-privacy)
+24. [License](#license)
 
 ---
 
@@ -258,6 +270,22 @@ What this does and does not cover, honestly:
 - If several customers pay at the very same moment, exposure can briefly pass the bond, because a payment already on the blockchain cannot be refused.
 
 Customer NIM still goes wallet-to-wallet and is never held by NimPoint. Agent bonds are the only funds NimPoint holds.
+
+## Limits and open risks
+
+NimPoint is honest about what it cannot do yet. A reader deciding whether to trust it should know these.
+
+| Limit | Why it exists | What reduces it today |
+| --- | --- | --- |
+| **The Naira leg cannot be verified.** NimPoint sees every NIM payment on-chain, but it cannot see inside a bank. An agent could tap "I've sent" without sending. | The app is not connected to any bank or payment provider. | The agent's bond, the 24-hour report window, the public record and ratings. |
+| **Top-ups are not covered by the bond.** The customer sends Naira first. | No blockchain can prove a bank transfer happened, so there is nothing objective to refund against. | Agents are vetted and added by the operator. Customers can report and the agent's record is public. |
+| **Refunds are manual.** The operator pays them from the bond wallet by hand. | Nimiq has no general smart contracts to release a bond automatically. | Bond movements are on-chain with a fixed memo, so anyone can audit them. |
+| **The operator holds the bond wallet.** Agents must trust the operator with their deposit. | Same reason: no contract can hold it. | The wallet is public, and each agent's balance can be recomputed from the chain. |
+| **Agents are few and hand-picked.** There is no self-service sign-up. | Letting anyone become an agent before bonds are funded would put customers at risk. | Planned once bonds are in regular use. |
+| **Small orders only.** ₦20,000 per order at most. | Keeps the loss small if something goes wrong while the network of agents is young. | Each agent can also set a lower limit. |
+| **Rates move.** The rate is locked for 30 minutes, and the agent carries the price risk in that time. | NIM is volatile. | The agent's spread (1.5% by default) pays for it. |
+| **Regulation.** Peer-to-peer crypto trading sits in a changing legal area in Nigeria. | Outside the app's control. | NimPoint never holds customer funds and does not present itself as a bank or exchange. Operators are responsible for following local rules. |
+| **Real usage is still early.** | The app is new. | The proof page shows real-money and test-network activity on separate tabs, so nothing is overstated. |
 
 ## Architecture
 
