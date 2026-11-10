@@ -7,8 +7,8 @@
 **Every POS stand, a NIM cash point.**
 Cash out NIM to any Nigerian bank, or walk up to a NimPoint agent and leave with cash. Top up the same way. Every payment verified on the Nimiq blockchain.
 
-[![CI](https://img.shields.io/github/actions/workflow/status/OWNER/nimpoint/ci.yml?branch=main&label=CI&logo=github)](../../actions/workflows/ci.yml)
-[![CodeQL](https://img.shields.io/github/actions/workflow/status/OWNER/nimpoint/codeql.yml?branch=main&label=CodeQL&logo=github)](../../actions/workflows/codeql.yml)
+[![CI](https://img.shields.io/github/actions/workflow/status/opeblow/NIMPOINT/ci.yml?branch=main&label=CI&logo=github)](../../actions/workflows/ci.yml)
+[![CodeQL](https://img.shields.io/github/actions/workflow/status/opeblow/NIMPOINT/codeql.yml?branch=main&label=CodeQL&logo=github)](../../actions/workflows/codeql.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-e9b213.svg)](LICENSE)
 ![Next.js](https://img.shields.io/badge/Next.js-15-12130f?logo=nextdotjs)
 ![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6?logo=typescript&logoColor=white)
