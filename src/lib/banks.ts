@@ -1,0 +1,32 @@
+/** Nigerian banks and fintechs with Paystack/NIP bank codes. Most-used first. */
+export const BANKS = [
+  { code: '999992', name: 'OPay' },
+  { code: '999991', name: 'PalmPay' },
+  { code: '50515', name: 'Moniepoint' },
+  { code: '50211', name: 'Kuda' },
+  { code: '058', name: 'GTBank' },
+  { code: '044', name: 'Access Bank' },
+  { code: '057', name: 'Zenith Bank' },
+  { code: '011', name: 'First Bank' },
+  { code: '033', name: 'UBA' },
+  { code: '070', name: 'Fidelity Bank' },
+  { code: '214', name: 'FCMB' },
+  { code: '232', name: 'Sterling Bank' },
+  { code: '032', name: 'Union Bank' },
+  { code: '035', name: 'Wema Bank / ALAT' },
+  { code: '221', name: 'Stanbic IBTC' },
+  { code: '050', name: 'Ecobank' },
+  { code: '076', name: 'Polaris Bank' },
+  { code: '082', name: 'Keystone Bank' },
+  { code: '101', name: 'Providus Bank' },
+  { code: '215', name: 'Unity Bank' },
+  { code: '301', name: 'Jaiz Bank' },
+  { code: '030', name: 'Heritage Bank' },
+  { code: '068', name: 'Standard Chartered' },
+  { code: '102', name: 'Titan Trust Bank' },
+  { code: '00103', name: 'Globus Bank' },
+  { code: '566', name: 'VFD Microfinance' },
+  { code: '565', name: 'Carbon' },
+] as const;
+
+export const bankName = (code: string) => BANKS.find((b) => b.code === code)?.name;
