@@ -18,30 +18,33 @@ interface Store {
   srem(key: string, value: string): Promise<void>;
 }
 
+/** Every key is prefixed, so NimPoint can share a Redis database with other apps safely. */
+const P = 'nimpoint:';
+
 function redisStore(url: string, token: string): Store {
   const r = new Redis({ url, token });
   return {
-    get: (k) => r.get(k),
+    get: (k) => r.get(P + k),
     async set(k, v, ttl) {
-      if (ttl) await r.set(k, v, { ex: ttl });
-      else await r.set(k, v);
+      if (ttl) await r.set(P + k, v, { ex: ttl });
+      else await r.set(P + k, v);
     },
     async setNx(k, v, ttl) {
-      return (await r.set(k, v, { nx: true, ex: ttl })) === 'OK';
+      return (await r.set(P + k, v, { nx: true, ex: ttl })) === 'OK';
     },
     async del(k) {
-      await r.del(k);
+      await r.del(P + k);
     },
     async lpush(k, v) {
-      await r.lpush(k, v);
+      await r.lpush(P + k, v);
     },
-    lrange: (k, a, b) => r.lrange<string>(k, a, b),
+    lrange: (k, a, b) => r.lrange<string>(P + k, a, b),
     async sadd(k, v) {
-      await r.sadd(k, v);
+      await r.sadd(P + k, v);
     },
-    smembers: (k) => r.smembers(k),
+    smembers: (k) => r.smembers(P + k),
     async srem(k, v) {
-      await r.srem(k, v);
+      await r.srem(P + k, v);
     },
   };
 }
