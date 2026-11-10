@@ -592,8 +592,13 @@ export function Flow() {
                     {error && <Notice tone="error">{error}</Notice>}
                     {wallet.status === 'outside' ? (
                       <OpenInNimiqPay compact />
-                    ) : wallet.status === 'denied' ? (
-                      <Notice tone="warn">Allow NimPoint to see your wallet address in Nimiq Pay to continue.</Notice>
+                    ) : wallet.status === 'denied' || (wallet.status === 'ready' && !wallet.address) ? (
+                      <>
+                        <Notice tone="warn">NimPoint needs to see your wallet address to find your payment. It can never move your NIM.</Notice>
+                        <Button className="w-full" onClick={() => void wallet.refresh()}>
+                          Allow wallet access
+                        </Button>
+                      </>
                     ) : (
                       <Button className="w-full" variant={kind === 'cashout' ? 'gold' : 'primary'} loading={creating || wallet.status === 'connecting'} disabled={!agreed || !rate || !!amountProblem} onClick={submit}>
                         {kind === 'cashout' ? `Send ${f.nim(nimAmount)}` : `Start top-up of ${f.ngn(ngnValue)}`}

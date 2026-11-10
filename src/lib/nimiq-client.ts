@@ -41,6 +41,8 @@ export function useWallet(): WalletState {
       setStatus('outside');
       return;
     }
+    // Asking again (after a "no") shows the spinner while Nimiq Pay prompts.
+    setStatus('connecting');
     try {
       const accounts = await p.listAccounts();
       setAddress(accounts[0] ?? null);
