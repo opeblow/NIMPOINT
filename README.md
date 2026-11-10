@@ -115,7 +115,7 @@ And against the published scoring:
 
 [**Watch the demo (MP4, 78 seconds)**](docs/demo.mp4)
 
-Tunde in Lekki sells NIM for ₦20,000. Amaka in Oshodi buys NIM with ₦10,000. One online, bonded NimPoint agent serves both, and nobody travels. The screens are recorded from the real app running the production build. For the recording, the wallets and the Nimiq node are simulated and the people are fictional; the video says so on every frame.
+Tunde in Lekki sells NIM for ₦20,000. Amaka in Oshodi buys NIM with ₦10,000. One online, bonded NimPoint agent serves both, and nobody travels. The screens are recorded from the real app running the production build. For the recording, the wallets and the Nimiq node are simulated and the people are fictional; the video says so on every frame. The narration is a computer-generated voice.
 
 ## The problem
 
