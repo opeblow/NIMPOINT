@@ -30,7 +30,7 @@ export default function ProofPage() {
     <div className="mx-auto min-h-[100dvh] w-full max-w-2xl px-4 pb-12 pt-[max(0.75rem,env(safe-area-inset-top))]">
       <header className="flex h-12 items-center justify-between">
         <Wordmark />
-        <Link href="/" className="text-[14px] font-medium text-ink-2">
+        <Link href="/app" className="text-[14px] font-medium text-ink-2">
           Open app
         </Link>
       </header>
