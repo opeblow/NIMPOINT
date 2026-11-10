@@ -1,0 +1,49 @@
+import { z } from 'zod';
+import { createOrder, ordersForWallet, publicOrder } from '@/lib/orders';
+import { handle, ok } from '@/lib/http';
+import { bankName } from '@/lib/banks';
+
+export const dynamic = 'force-dynamic';
+
+const nimiqAddress = z
+  .string()
+  .transform((s) => s.replace(/\s+/g, '').toUpperCase())
+  .refine((s) => /^NQ[0-9]{2}[0-9A-Z]{32}$/.test(s), 'That Nimiq address looks wrong.');
+
+const CreateSchema = z.object({
+  kind: z.enum(['cashout', 'topup']),
+  mode: z.enum(['bank', 'cash']),
+  agentId: z.string().min(1),
+  wallet: nimiqAddress,
+  ngn: z.number().int().positive(),
+  bank: z
+    .object({
+      bankCode: z.string().min(3),
+      accountNumber: z.string().regex(/^\d{10}$/, 'Account number should be 10 digits.'),
+      accountName: z.string().trim().min(3, 'Add the name on the account.').max(80),
+    })
+    .optional(),
+});
+
+export async function POST(req: Request) {
+  try {
+    const body = CreateSchema.parse(await req.json());
+    const bank = body.bank
+      ? { ...body.bank, bankName: bankName(body.bank.bankCode) ?? 'Bank' }
+      : undefined;
+    const order = await createOrder({ ...body, bank });
+    return ok({ order });
+  } catch (err) {
+    return handle(err);
+  }
+}
+
+export async function GET(req: Request) {
+  try {
+    const wallet = nimiqAddress.parse(new URL(req.url).searchParams.get('wallet') ?? '');
+    const orders = await ordersForWallet(wallet);
+    return ok({ orders: orders.map((o) => publicOrder(o)) });
+  } catch (err) {
+    return handle(err);
+  }
+}
