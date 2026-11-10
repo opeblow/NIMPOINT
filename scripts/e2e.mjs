@@ -47,7 +47,7 @@ r = await call('/api/agents');
 check(r.body.agents?.length === 1 && r.body.agents[0].online, 'agent listed and online', r.body);
 
 // ── validation
-r = await call('/api/orders', { method: 'POST', json: { kind: 'cashout', mode: 'bank', agentId: 'yaba-1', wallet: USER1, ngn: 100, bank } });
+r = await call('/api/orders', { method: 'POST', json: { kind: 'cashout', mode: 'bank', agentId: 'yaba-1', wallet: USER1, ngn: 20, bank } });
 check(r.status === 400 && /between/.test(r.body.error), 'rejects amount under minimum', r.body);
 r = await call('/api/orders', { method: 'POST', json: { kind: 'cashout', mode: 'bank', agentId: 'yaba-1', wallet: USER1, ngn: 25000, bank } });
 check(r.status === 400, 'rejects amount over maximum', r.body);

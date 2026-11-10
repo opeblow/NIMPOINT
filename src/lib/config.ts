@@ -1,6 +1,7 @@
 /** Product limits and constants shared by server and client. */
 export const LIMITS = {
-  minNgn: 500,
+  // Lowered from 500 while the first real orders are tested. Raise it back once the flow is proven.
+  minNgn: 50,
   maxNgn: 20_000,
 } as const;
 
