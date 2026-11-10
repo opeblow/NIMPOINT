@@ -88,7 +88,7 @@ NimPoint is a Mini App inside Nimiq Pay that lets people in Nigeria turn NIM int
 
 **What NimPoint does not do:** it does not move Naira itself and is not connected to any bank. The Naira leg is always a normal transfer between two people. That is why the agent's bond, the public record and the 24-hour report window exist: see [Safety model](#safety-model).
 
-A customer in Lekki and a customer in Oshodi never have to meet, and neither has to meet the agent. The demo video shows exactly that.
+A customer in Lekki and a customer in Oshodi never have to meet, and neither has to meet the agent.
 
 ## How it fits Cycle III
 
@@ -113,9 +113,9 @@ And against the published scoring:
 
 ## Demo video
 
-[**Watch the demo (MP4, 78 seconds)**](docs/demo.mp4)
+[**Watch the launch film (MP4, 2 minutes 54 seconds)**](docs/demo.mp4)
 
-Tunde in Lekki sells NIM for ₦20,000. Amaka in Oshodi buys NIM with ₦10,000. One online, bonded NimPoint agent serves both, and nobody travels. The screens are recorded from the real app running the production build. For the recording, the wallets and the Nimiq node are simulated and the people are fictional; the video says so on every frame. The narration is a computer-generated voice.
+Why the corner POS stand matters, then the product: a cash-out to a bank account, a cash pickup, a top-up, the agent's side, the bond, and the public proof page. The screens are captured from the real app. For the recording, the wallets and the Nimiq node are simulated and the people are fictional; the film says so on every product scene. The narration is a computer-generated voice and the music is original.
 
 ## The problem
 
