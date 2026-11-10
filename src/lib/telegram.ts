@@ -1,0 +1,65 @@
+import 'server-only';
+import type { Agent } from './agents';
+import type { Order } from './types';
+import { ngn, nim } from './format';
+import { EXPLORER_TX } from './config';
+
+const token = () => process.env.TELEGRAM_BOT_TOKEN;
+export const appUrl = () =>
+  process.env.APP_URL ?? (process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : 'http://localhost:3000');
+
+export async function telegram(method: string, body: Record<string, unknown>) {
+  const t = token();
+  if (!t) return null;
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${t}/${method}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(6_000),
+    });
+    return await res.json();
+  } catch (err) {
+    console.error('[telegram]', method, err);
+    return null;
+  }
+}
+
+const esc = (s: string) => s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]!);
+
+/** Alerts never throw: a Telegram outage must not break an order. */
+export async function alertAgent(agent: Agent, order: Order, event: 'paid' | 'fiat_sent' | 'disputed' | 'created_cash') {
+  if (!agent.telegramChatId) return;
+  const console_ = `${appUrl()}/agent`;
+  const lines: string[] = [];
+  let keyboard: unknown[][] = [[{ text: 'Open console', url: console_ }]];
+
+  if (event === 'paid') {
+    const pay = order.payoutNgn ?? order.ngn;
+    lines.push(`💸 <b>Pay out ${ngn(pay)}</b> · order <code>${order.id}</code>`);
+    lines.push(`Received ${nim(order.tx?.nim ?? order.nim)} on-chain ✅`);
+    if (order.mode === 'bank' && order.bank) {
+      lines.push('', `<b>${esc(order.bank.accountName)}</b>`, `${esc(order.bank.bankName)} · <code>${order.bank.accountNumber}</code>`);
+    } else {
+      lines.push('', '🧍 Customer is collecting <b>cash in hand</b>. Check the code on their phone.');
+    }
+    if (order.tx) lines.push('', `<a href="${EXPLORER_TX(order.tx.hash)}">View transaction</a>`);
+    keyboard = [[{ text: `✅ I've paid ${ngn(pay)}`, callback_data: `sent:${order.id}` }], ...keyboard];
+  } else if (event === 'fiat_sent') {
+    lines.push(`🪙 <b>Top-up ${ngn(order.ngn)}</b> · order <code>${order.id}</code>`);
+    lines.push(`Customer says they ${order.mode === 'cash' ? 'handed you cash' : 'sent the Naira'}.`);
+    lines.push(`When it's in, send <b>${nim(order.nim)}</b> from the console.`);
+  } else if (event === 'created_cash') {
+    lines.push(`👋 Walk-up cash-out started: ${ngn(order.ngn)} · <code>${order.id}</code>`);
+  } else {
+    lines.push(`⚠️ <b>Customer reports a problem</b> with order <code>${order.id}</code> (${ngn(order.ngn)}). Please reach out.`);
+  }
+
+  await telegram('sendMessage', {
+    chat_id: agent.telegramChatId,
+    text: lines.join('\n'),
+    parse_mode: 'HTML',
+    disable_web_page_preview: true,
+    reply_markup: { inline_keyboard: keyboard },
+  });
+}
