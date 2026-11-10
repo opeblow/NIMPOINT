@@ -194,7 +194,7 @@ function Shell({ children }: { children: React.ReactNode }) {
     <div className="mx-auto min-h-[100dvh] w-full max-w-md px-4 pb-12 pt-[max(0.75rem,env(safe-area-inset-top))]">
       <header className="flex h-12 items-center justify-between">
         <Wordmark />
-        <Link href="/" className="text-[13px] font-medium text-ink-3">
+        <Link href="/app" className="text-[13px] font-medium text-ink-3">
           Customer app
         </Link>
       </header>
@@ -356,7 +356,7 @@ function OnlineSwitch({ online, onChange }: { online: boolean; onChange: (v: boo
 
 function AgentQr({ agentId, name }: { agentId: string; name: string }) {
   const [url, setUrl] = useState('');
-  useEffect(() => setUrl(`https://nimpay.app/miniapps/open/${window.location.host}/?agent=${agentId}&mode=cash`), [agentId]);
+  useEffect(() => setUrl(`https://nimpay.app/miniapps/open/${window.location.host}/app?agent=${agentId}&mode=cash`), [agentId]);
   return (
     <div className="text-center">
       <div className="mx-auto w-fit rounded-[28px] border border-line bg-white p-5">
