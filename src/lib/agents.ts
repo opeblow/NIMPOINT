@@ -6,7 +6,12 @@ const AgentSchema = z.object({
   id: z.string().regex(/^[a-z0-9-]{2,32}$/),
   name: z.string().min(1),
   area: z.string().default('Lagos'),
-  address: z.string().min(36),
+  address: z
+    .string()
+    .transform((s) => s.replace(/\s+/g, '').toUpperCase().replace(/(.{4})(?=.)/g, '$1 '))
+    .refine((s) => /^NQ[0-9]{2}( [0-9A-Z]{4}){8}$/.test(s), 'AGENT_ADDRESS must be a Nimiq address like NQ12 ABCD ...')
+    // The all-zero placeholder can never receive orders: NIM sent there would be lost.
+    .refine((s) => !/^NQ00( 0000){8}$/.test(s), 'AGENT_ADDRESS is still the placeholder. Set your real Nimiq Pay address.'),
   modes: z.array(z.enum(['bank', 'cash'])).default(['bank', 'cash']),
   kinds: z.array(z.enum(['cashout', 'topup'])).default(['cashout', 'topup']),
   cashoutSpreadBps: z.number().int().min(0).max(1000).default(150),
