@@ -595,15 +595,34 @@ export function Flow() {
 }
 
 function WalletChip({ status, address }: { status: string; address: string | null }) {
-  if (status === 'ready' && address)
-    return (
-      <span className="flex items-center gap-2 rounded-full border border-line bg-card px-3 py-1.5 text-[13px] font-medium">
-        <span className="h-2 w-2 rounded-full bg-naira" />
-        <span className="font-mono tabular">{f.shortAddress(address)}</span>
-      </span>
-    );
+  if (status === 'ready' && address) return <AddressButton address={address} />;
   if (status === 'connecting') return <span className="h-8 w-28 animate-pulse rounded-full bg-paper-2" />;
   return <span className="rounded-full bg-paper-2 px-3 py-1.5 text-[13px] text-ink-3">Preview mode</span>;
+}
+
+/** Tap to copy your full wallet address (also how agents find theirs). */
+function AddressButton({ address }: { address: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(address);
+    } catch {
+      const t = document.createElement('textarea');
+      t.value = address;
+      document.body.appendChild(t);
+      t.select();
+      document.execCommand('copy');
+      t.remove();
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1600);
+  };
+  return (
+    <button onClick={copy} aria-label="Copy my wallet address" className="flex items-center gap-2 rounded-full border border-line bg-card px-3 py-1.5 text-[13px] font-medium">
+      <span className="h-2 w-2 rounded-full bg-naira" />
+      <span className="font-mono tabular">{copied ? 'Address copied' : f.shortAddress(address)}</span>
+    </button>
+  );
 }
 
 function Avatar({ name }: { name: string }) {
