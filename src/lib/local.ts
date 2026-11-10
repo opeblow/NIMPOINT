@@ -39,5 +39,9 @@ export const rememberAgent = (id: string) => write('np:agent', id);
 export const agentKey = () => read<string | null>('np:agent-key', null);
 export const rememberAgentKey = (k: string | null) => write('np:agent-key', k);
 
+/** Order secret from creation: proves this device made the order. */
+export const orderToken = (id: string) => read<string | null>(`np:ot:${id}`, null);
+export const rememberOrderToken = (id: string, token: string) => write(`np:ot:${id}`, token);
+
 export const termsAccepted = () => read<boolean>('np:terms', false);
 export const acceptTerms = () => write('np:terms', true);

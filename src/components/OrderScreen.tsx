@@ -98,6 +98,12 @@ export function OrderScreen({ id }: { id: string }) {
     setBusy('pay');
     setActionError(null);
     try {
+      // "Pay again": ask the server to check the chain first. If the first payment landed, stop here.
+      if (sentAt !== null) {
+        const fresh = await orderAction(order.id, { action: 'sync' });
+        setView(fresh);
+        if (fresh.order.status !== 'awaiting_payment' && fresh.order.status !== 'expired') return;
+      }
       const result = await payWithMemo(order.nimRecipient, order.nim, order.memo);
       writeSent(order.id);
       setSentAt(Date.now());
@@ -113,7 +119,7 @@ export function OrderScreen({ id }: { id: string }) {
     } finally {
       setBusy(null);
     }
-  }, [order]);
+  }, [order, sentAt]);
 
   // Came straight from "Send": open the Nimiq Pay prompt once.
   useEffect(() => {
@@ -177,6 +183,13 @@ export function OrderScreen({ id }: { id: string }) {
 
       <div className="mt-5 space-y-4">
         {actionError && <Notice tone="error">{actionError}</Notice>}
+        {order.extraPayments?.length ? (
+          <Notice tone="warn">
+            {order.kind === 'cashout'
+              ? `We also received ${f.nim(order.extraPayments.reduce((a, t) => a + t.nim, 0))} more with this order's code. That's an extra payment: ${agentName} has been told to refund it to your wallet.`
+              : `${agentName} sent you ${f.nim(order.extraPayments.reduce((a, t) => a + t.nim, 0))} more than this order. Please send it back to them.`}
+          </Notice>
+        ) : null}
         {shortNote && order.status !== 'completed' && (
           <Notice tone="warn">
             {shortNote}. You&apos;ll receive {f.ngn(payout)}.
@@ -207,7 +220,7 @@ export function OrderScreen({ id }: { id: string }) {
               ) : null}
               {wallet.status !== 'outside' && canRetryPay && (
                 <Button variant="gold" className="mt-3 w-full" loading={busy === 'pay' || wallet.status === 'connecting'} onClick={pay}>
-                  {sentAt ? 'Payment not found? Pay again' : `Pay ${f.nim(order.nim)} with Nimiq Pay`}
+                  {sentAt ? 'Not in your Nimiq Pay history? Pay again' : `Pay ${f.nim(order.nim)} with Nimiq Pay`}
                 </Button>
               )}
             </div>

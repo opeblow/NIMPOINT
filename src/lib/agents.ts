@@ -1,4 +1,5 @@
 import 'server-only';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import type { OrderKind, PayoutMode } from './types';
 
@@ -24,7 +25,10 @@ const AgentSchema = z.object({
   telegram: z.string().optional(),
   telegramChatId: z.string().optional(),
   /** Secret for the agent console. Never sent to the browser. */
-  key: z.string().min(8),
+  key: z
+    .string()
+    .min(8)
+    .refine((k) => k !== 'change-me-please', 'Set a real AGENT_KEY.'),
 });
 
 export type Agent = z.infer<typeof AgentSchema>;
@@ -52,7 +56,7 @@ export function listAgents(): Agent[] {
         name: process.env.AGENT_NAME ?? 'NimPoint Yaba',
         area: process.env.AGENT_AREA ?? 'Yaba, Lagos',
         address: process.env.AGENT_ADDRESS,
-        key: process.env.AGENT_KEY ?? 'change-me-please',
+        key: process.env.AGENT_KEY ?? '',
         telegram: process.env.AGENT_TELEGRAM,
         telegramChatId: process.env.AGENT_TELEGRAM_CHAT_ID,
         bank: process.env.AGENT_BANK_NAME
@@ -75,8 +79,15 @@ export function listAgents(): Agent[] {
 
 export const getAgent = (id: string) => listAgents().find((a) => a.id === id);
 
-export const agentByKey = (key: string | null | undefined) =>
-  key ? listAgents().find((a) => a.key === key) : undefined;
+const digest = (s: string) => createHash('sha256').update(s).digest();
+
+/** Constant-time compare, so response timing can't leak the key. */
+export function sameSecret(a: string | null | undefined, b: string | null | undefined) {
+  if (!a || !b) return false;
+  return timingSafeEqual(digest(a), digest(b));
+}
+
+export const agentByKey = (key: string | null | undefined) => (key ? listAgents().find((a) => sameSecret(a.key, key)) : undefined);
 
 export function supports(agent: Agent, kind: OrderKind, mode: PayoutMode) {
   if (!agent.kinds.includes(kind) || !agent.modes.includes(mode)) return false;

@@ -18,13 +18,22 @@ const fail = (msg, extra) => {
 const check = (cond, msg, extra) => (cond ? (passed++, console.log(`✓ ${msg}`)) : fail(msg, extra));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function call(path, { method = 'GET', json, key } = {}) {
+const secrets = new Map(); // order id -> secret, as the creator's phone keeps it
+async function call(path, { method = 'GET', json, key, noToken } = {}) {
+  const id = path.match(/^\/api\/orders\/([A-Z0-9]+)/)?.[1];
+  const token = id && !noToken ? secrets.get(id) : undefined;
   const res = await fetch(APP + path, {
     method,
-    headers: { ...(json ? { 'Content-Type': 'application/json' } : {}), ...(key ? { 'x-agent-key': key } : {}) },
+    headers: {
+      ...(json ? { 'Content-Type': 'application/json' } : {}),
+      ...(key ? { 'x-agent-key': key } : {}),
+      ...(token ? { 'x-order-token': token } : {}),
+    },
     body: json ? JSON.stringify(json) : undefined,
   });
-  return { status: res.status, body: await res.json().catch(() => ({})) };
+  const body = await res.json().catch(() => ({}));
+  if (body.order?.secret) secrets.set(body.order.id, body.order.secret);
+  return { status: res.status, body };
 }
 const send = async (from, to, nim, data, htlcOwner) =>
   (await (await fetch(RPC + '/_send', { method: 'POST', body: JSON.stringify({ from, to, value: Math.round(nim * 1e5), data, htlcOwner }) })).json()).hash;
@@ -86,6 +95,12 @@ check(r.body.order?.status === 'payout_sent', 'agent marks payout sent', r.body)
 r = await call('/api/agent', { method: 'POST', key: KEY, json: { action: 'payout_sent', id: o1.id } });
 check(r.status === 400, 'cannot mark payout twice');
 
+r = await call(`/api/orders/${o1.id}`, { method: 'POST', json: { action: 'confirm' }, noToken: true });
+check(r.status === 403, 'a stranger cannot confirm someone else\'s order', r.body);
+r = await call(`/api/orders/${o1.id}`);
+check(!r.body.order.secret, 'order secret is never shown on the public view');
+r = await call('/api/agent', { key: KEY });
+check(r.body.orders.every((o) => !o.secret), 'agent never sees order secrets');
 r = await call(`/api/orders/${o1.id}`, { method: 'POST', json: { action: 'confirm' } });
 check(r.body.order.status === 'completed', 'user confirms receipt');
 r = await call(`/api/orders/${o1.id}`, { method: 'POST', json: { action: 'rate', stars: 5, comment: 'Fast!' } });
@@ -150,5 +165,66 @@ await sleep(3200);
 r = await call('/api/orders', { method: 'POST', json: { kind: 'cashout', mode: 'cash', agentId: 'yaba-1', wallet: USER1, ngn: 2000 } });
 check(r.status === 400 && /offline/.test(r.body.error), 'offline agent gets no new orders', r.body);
 await call('/api/agent', { method: 'POST', key: KEY, json: { action: 'online', online: true } });
+
+// ── idempotency
+const USER3 = 'NQ55 EEEE EEEE EEEE EEEE EEEE EEEE EEEE EEEE';
+const idemBody = { kind: 'cashout', mode: 'bank', agentId: 'yaba-1', wallet: USER3, ngn: 4000, bank, idempotencyKey: 'e2e-idem-key-0001' };
+r = await call('/api/orders', { method: 'POST', json: idemBody });
+check(r.status === 200, 'order created with idempotency key', r.body);
+const o4 = r.body.order;
+r = await call('/api/orders', { method: 'POST', json: idemBody });
+check(r.status === 200 && r.body.order.id === o4.id, 'retry with same key returns the same order', r.body);
+r = await call('/api/orders', { method: 'POST', json: { ...idemBody, ngn: 4500 } });
+check(r.status === 422, 'same key with different details is refused', r.body);
+
+// many requests at once see one payment: exactly one "paid" event
+await send(HTLC1, AGENT, o4.nim, o4.memo, USER3);
+await Promise.all([
+  ...Array.from({ length: 6 }, () => call(`/api/orders/${o4.id}`, { method: 'POST', json: { action: 'sync' } })),
+  ...Array.from({ length: 4 }, () => call(`/api/orders/${o4.id}`)),
+  call('/api/agent', { key: KEY }),
+]);
+r = await call(`/api/orders/${o4.id}`);
+check(r.body.order.status === 'paid', 'concurrent syncs settle the order', r.body.order);
+check(r.body.order.events.filter((e) => e.status === 'paid').length === 1, 'concurrent syncs record exactly one payment', r.body.order.events);
+
+// payout marked while syncs run is never overwritten
+const racing = Array.from({ length: 6 }, () => call(`/api/orders/${o4.id}`, { method: 'POST', json: { action: 'sync' } }));
+r = await call('/api/agent', { method: 'POST', key: KEY, json: { action: 'payout_sent', id: o4.id } });
+await Promise.all(racing);
+check(r.body.order?.status === 'payout_sent', 'agent marks payout during concurrent syncs', r.body);
+r = await call(`/api/orders/${o4.id}`);
+check(r.body.order.status === 'payout_sent', 'payout_sent survives concurrent syncs', r.body.order);
+
+// user pays twice: second payment is recorded for refund, order unchanged
+const hExtra = await send(HTLC1, AGENT, o4.nim, o4.memo, USER3);
+r = await call(`/api/orders/${o4.id}`, { method: 'POST', json: { action: 'tx', hash: hExtra } });
+check(
+  r.body.order.status === 'payout_sent' && r.body.order.extraPayments?.length === 1 && r.body.order.extraPayments[0].hash === hExtra,
+  'duplicate payment flagged for refund',
+  r.body.order,
+);
+r = await call(`/api/orders/${o4.id}`, { method: 'POST', json: { action: 'sync' } });
+check(r.body.order.extraPayments.length === 1, 'duplicate payment recorded once');
+
+// agent top-up send lock
+await sleep(3200);
+r = await call('/api/orders', { method: 'POST', json: { kind: 'topup', mode: 'cash', agentId: 'yaba-1', wallet: USER3, ngn: 2500 } });
+const o5 = r.body.order;
+r = await call('/api/agent', { method: 'POST', key: KEY, json: { action: 'nim_sending', id: o5.id } });
+check(r.status === 200 && r.body.order.sendStartedAt > 0, 'agent send takes a lock', r.body);
+r = await call('/api/agent', { method: 'POST', key: KEY, json: { action: 'nim_sending', id: o5.id } });
+check(r.status === 409, 'second send is blocked', r.body);
+r = await call('/api/agent', { method: 'POST', key: KEY, json: { action: 'nim_sending', id: o5.id, retry: true } });
+check(r.status === 409 && /Wait/.test(r.body.error), 'retry is blocked while the first send may still land', r.body);
+r = await call('/api/agent', { method: 'POST', key: KEY, json: { action: 'nim_cancelled', id: o5.id } });
+check(r.status === 200 && !r.body.order.sendStartedAt, 'cancelled send releases the lock', r.body);
+r = await call('/api/agent', { method: 'POST', key: KEY, json: { action: 'nim_sending', id: o5.id } });
+check(r.status === 200, 'send can start again after a cancel', r.body);
+const h5 = await send(AGENT_HTLC, USER3, o5.nim, o5.memo, AGENT);
+r = await call('/api/agent', { method: 'POST', key: KEY, json: { action: 'nim_sent', id: o5.id, hash: h5 } });
+check(r.body.order?.status === 'paid', 'agent NIM verified', r.body);
+r = await call('/api/agent', { method: 'POST', key: KEY, json: { action: 'nim_sending', id: o5.id, retry: true } });
+check(r.status === 409 && /already paid/.test(r.body.error), 'no send once the chain shows it paid', r.body);
 
 console.log(`\nAll ${passed} checks passed.`);

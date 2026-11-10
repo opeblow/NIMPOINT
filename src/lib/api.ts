@@ -1,5 +1,6 @@
 'use client';
 
+import { orderToken } from './local';
 import type { Order, PublicAgent, Quote } from './types';
 
 export class ApiError extends Error {
@@ -40,4 +41,7 @@ export interface OrderView {
 export const fetchQuote = () => api<Quote>('/api/rate');
 export const fetchAgents = () => api<{ agents: PublicAgent[] }>('/api/agents');
 export const fetchOrder = (id: string) => api<OrderView>(`/api/orders/${id}`);
-export const orderAction = (id: string, json: Record<string, unknown>) => api<OrderView>(`/api/orders/${id}`, { method: 'POST', json });
+export const orderAction = (id: string, json: Record<string, unknown>) => {
+  const token = orderToken(id);
+  return api<OrderView>(`/api/orders/${id}`, { method: 'POST', json, headers: token ? { 'x-order-token': token } : undefined });
+};

@@ -81,10 +81,21 @@ export function walletErrorMessage(err: unknown) {
   return (err as Error)?.message || 'Nimiq Pay could not complete the payment.';
 }
 
+const NOT_IN_NIMIQ_PAY = 'Open NimPoint inside Nimiq Pay to pay.';
+
+/** True only when Nimiq Pay is certain no NIM left the wallet. Anything else might have been sent. */
+export function definitelyNotSent(err: unknown) {
+  if (NimiqProviderError.is(err)) {
+    const t = err.type.toUpperCase();
+    return ['REJECT', 'DENIED', 'CANCEL', 'INSUFFICIENT', 'BALANCE'].some((w) => t.includes(w));
+  }
+  return (err as Error)?.message === NOT_IN_NIMIQ_PAY;
+}
+
 /** Ask Nimiq Pay to send NIM with our order memo. Returns whatever the host returns (hash or serialized tx). */
 export async function payWithMemo(recipient: string, nim: number, memo: string) {
   const p = await getProvider();
-  if (!p) throw new Error('Open NimPoint inside Nimiq Pay to pay.');
+  if (!p) throw new Error(NOT_IN_NIMIQ_PAY);
   return p.sendBasicTransactionWithData({
     recipient: recipient.replace(/\s+/g, ''),
     value: Math.round(nim * LUNA_PER_NIM),

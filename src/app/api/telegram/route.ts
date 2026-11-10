@@ -1,4 +1,4 @@
-import { listAgents } from '@/lib/agents';
+import { listAgents, sameSecret } from '@/lib/agents';
 import { getOrder, markPayoutSent } from '@/lib/orders';
 import { ok } from '@/lib/http';
 import { telegram } from '@/lib/telegram';
@@ -14,7 +14,7 @@ interface Update {
 /** Telegram webhook: agents tap "I've paid" right in the alert. */
 export async function POST(req: Request) {
   const secret = process.env.TELEGRAM_WEBHOOK_SECRET;
-  if (!secret || req.headers.get('x-telegram-bot-api-secret-token') !== secret) return ok({ ok: false }, { status: 401 });
+  if (!sameSecret(req.headers.get('x-telegram-bot-api-secret-token'), secret)) return ok({ ok: false }, { status: 401 });
 
   const update = (await req.json().catch(() => ({}))) as Update;
 
@@ -33,7 +33,10 @@ export async function POST(req: Request) {
     const agent = listAgents().find((a) => a.telegramChatId === chatId);
     const order = await getOrder(cb.data.slice(5));
     let reply = 'Order not found.';
-    if (agent && order && order.agentId === agent.id) {
+    if (agent && order && order.agentId === agent.id && order.status !== 'paid') {
+      // Telegram retries webhooks and agents double-tap: a repeat is not an error.
+      reply = order.status === 'payout_sent' || order.status === 'completed' ? 'Already marked as paid.' : `Order is ${order.status.replace('_', ' ')}.`;
+    } else if (agent && order && order.agentId === agent.id) {
       try {
         await markPayoutSent(order, agent);
         reply = `Marked as paid. The customer has been told ${ngn(order.payoutNgn ?? order.ngn)} is on the way.`;

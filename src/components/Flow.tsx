@@ -3,12 +3,12 @@
 import { motion } from 'motion/react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, ApiError, fetchAgents, fetchQuote } from '@/lib/api';
 import { BANKS } from '@/lib/banks';
 import { LIMITS } from '@/lib/config';
 import * as f from '@/lib/format';
-import { acceptTerms, forgetAccount, lastAgent, rememberAccount, rememberAgent, savedAccounts, termsAccepted, type SavedAccount } from '@/lib/local';
+import { acceptTerms, forgetAccount, lastAgent, rememberAccount, rememberAgent, rememberOrderToken, savedAccounts, termsAccepted, type SavedAccount } from '@/lib/local';
 import { useWallet } from '@/lib/nimiq-client';
 import type { Order, OrderKind, PayoutMode, PublicAgent, Quote } from '@/lib/types';
 import CoinStage from './CoinStage';
@@ -16,6 +16,15 @@ import { applyKey, Keypad } from './Keypad';
 import { OpenInNimiqPay } from './OpenInNimiqPay';
 import { RecentOrders } from './RecentOrders';
 import { Button, Card, cx, Notice, RollingNumber, Segmented, Stars, Wordmark } from './ui';
+
+function newIdempotencyKey() {
+  try {
+    return crypto.randomUUID();
+  } catch {
+    // Older webviews without randomUUID.
+    return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+  }
+}
 
 type Step = 'amount' | 'method' | 'agent' | 'bank' | 'review';
 
@@ -46,6 +55,7 @@ export function Flow() {
   const [agreed, setAgreed] = useState(false);
   const [termsSeen, setTermsSeen] = useState(true);
   const [creating, setCreating] = useState(false);
+  const idem = useRef<{ sig: string; key: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   /* live data */
@@ -129,17 +139,22 @@ export function Flow() {
     setError(null);
     try {
       acceptTerms();
+      const body = {
+        kind,
+        mode,
+        agentId: agent.id,
+        wallet: wallet.address,
+        ngn: ngnValue,
+        bank: kind === 'cashout' && mode === 'bank' ? bank : undefined,
+      };
+      // Same order details → same key, so a retry on a slow network returns the same order.
+      const sig = JSON.stringify(body);
+      if (idem.current?.sig !== sig) idem.current = { sig, key: newIdempotencyKey() };
       const { order } = await api<{ order: Order }>('/api/orders', {
         method: 'POST',
-        json: {
-          kind,
-          mode,
-          agentId: agent.id,
-          wallet: wallet.address,
-          ngn: ngnValue,
-          bank: kind === 'cashout' && mode === 'bank' ? bank : undefined,
-        },
+        json: { ...body, idempotencyKey: idem.current.key },
       });
+      if (order.secret) rememberOrderToken(order.id, order.secret);
       rememberAgent(agent.id);
       if (kind === 'cashout' && mode === 'bank') {
         const bankName = BANKS.find((b) => b.code === bank.bankCode)?.name ?? 'Bank';

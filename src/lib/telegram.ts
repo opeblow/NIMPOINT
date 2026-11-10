@@ -1,6 +1,6 @@
 import 'server-only';
 import type { Agent } from './agents';
-import type { Order } from './types';
+import type { OnchainTx, Order } from './types';
 import { ngn, nim } from './format';
 import { EXPLORER_TX } from './config';
 
@@ -28,7 +28,12 @@ export async function telegram(method: string, body: Record<string, unknown>) {
 const esc = (s: string) => s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]!);
 
 /** Alerts never throw: a Telegram outage must not break an order. */
-export async function alertAgent(agent: Agent, order: Order, event: 'paid' | 'fiat_sent' | 'disputed' | 'created_cash') {
+export async function alertAgent(
+  agent: Agent,
+  order: Order,
+  event: 'paid' | 'fiat_sent' | 'disputed' | 'created_cash' | 'extra_payment',
+  extra?: OnchainTx,
+) {
   if (!agent.telegramChatId) return;
   const console_ = `${appUrl()}/agent`;
   const lines: string[] = [];
@@ -49,6 +54,15 @@ export async function alertAgent(agent: Agent, order: Order, event: 'paid' | 'fi
     lines.push(`🪙 <b>Top-up ${ngn(order.ngn)}</b> · order <code>${order.id}</code>`);
     lines.push(`Customer says they ${order.mode === 'cash' ? 'handed you cash' : 'sent the Naira'}.`);
     lines.push(`When it's in, send <b>${nim(order.nim)}</b> from the console.`);
+  } else if (event === 'extra_payment' && extra) {
+    if (order.kind === 'cashout') {
+      lines.push(`<b>Extra payment</b> on order <code>${order.id}</code>: another ${nim(extra.nim)} arrived with the same memo.`);
+      lines.push(`The customer paid twice. Refund ${nim(extra.nim)} to <code>${order.wallet}</code>.`);
+    } else {
+      lines.push(`<b>You sent NIM twice</b> for order <code>${order.id}</code> (extra ${nim(extra.nim)}).`);
+      lines.push('Ask the customer to send it back.');
+    }
+    lines.push('', `<a href="${EXPLORER_TX(extra.hash)}">View transaction</a>`);
   } else if (event === 'created_cash') {
     lines.push(`👋 Walk-up cash-out started: ${ngn(order.ngn)} · <code>${order.id}</code>`);
   } else {

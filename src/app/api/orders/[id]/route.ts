@@ -4,6 +4,7 @@ import {
   confirmReceived,
   disputeOrder,
   getOrder,
+  ownsOrder,
   markFiatSent,
   publicAgent,
   publicOrder,
@@ -57,6 +58,10 @@ export async function POST(req: Request, { params }: Ctx) {
     const order = await getOrder((await params).id);
     if (!order) return fail('Order not found.', 404);
     const body = ActionSchema.parse(await req.json());
+    // Anyone may report a payment or refresh (both are checked on-chain). Everything else is the creator's call.
+    if (body.action !== 'tx' && body.action !== 'sync' && !ownsOrder(order, req.headers.get('x-order-token'))) {
+      return fail('Only the person who created this order can do that.', 403);
+    }
     let next: Order;
     switch (body.action) {
       case 'tx':

@@ -23,6 +23,10 @@ const CreateSchema = z.object({
       accountName: z.string().trim().min(3, 'Add the name on the account.').max(80),
     })
     .optional(),
+  idempotencyKey: z
+    .string()
+    .regex(/^[A-Za-z0-9_-]{8,64}$/)
+    .optional(),
 });
 
 export async function POST(req: Request) {
@@ -32,7 +36,8 @@ export async function POST(req: Request) {
       ? { ...body.bank, bankName: bankName(body.bank.bankCode) ?? 'Bank' }
       : undefined;
     const order = await createOrder({ ...body, bank });
-    return ok({ order });
+    // The creator gets the order secret once; it unlocks confirm, rate and dispute.
+    return ok({ order: { ...publicOrder(order, true), secret: order.secret } });
   } catch (err) {
     return handle(err);
   }

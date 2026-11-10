@@ -6,7 +6,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api, ApiError } from '@/lib/api';
 import * as f from '@/lib/format';
 import { agentKey, rememberAgentKey } from '@/lib/local';
-import { payWithMemo, walletErrorMessage } from '@/lib/nimiq-client';
+import { definitelyNotSent, payWithMemo, walletErrorMessage } from '@/lib/nimiq-client';
 import type { Order, PublicAgent } from '@/lib/types';
 import { StatusPill } from '@/components/StatusPill';
 import { Button, Card, CopyField, cx, Notice, Sheet, Spinner, Stars, Wordmark } from '@/components/ui';
@@ -15,6 +15,9 @@ interface Dash {
   agent: PublicAgent;
   orders: Order[];
 }
+
+/** Matches the server's lock: after this, a stuck send may be retried. */
+const SEND_LOCK_MS = 10 * 60_000;
 
 const needsAgent = (o: Order) => (o.kind === 'cashout' && o.status === 'paid') || (o.kind === 'topup' && ['fiat_sent', 'awaiting_fiat', 'disputed'].includes(o.status) && !o.tx);
 const isOpen = (o: Order) => !needsAgent(o) && !['completed', 'expired'].includes(o.status);
@@ -225,6 +228,13 @@ function Line({ order: o }: { order: Order }) {
           <span className="font-mono">{o.id}</span> · {f.ago(o.createdAt)}
           {o.rating ? <Stars value={o.rating} size="sm" /> : null}
         </p>
+        {o.extraPayments?.length ? (
+          <p className="mt-0.5 text-[12px] font-medium text-danger">
+            {o.kind === 'cashout'
+              ? `Paid twice: refund ${f.nim(o.extraPayments.reduce((a, t) => a + t.nim, 0))} to ${f.shortAddress(o.wallet)}`
+              : `You sent ${f.nim(o.extraPayments.reduce((a, t) => a + t.nim, 0))} extra. Ask the customer to return it.`}
+          </p>
+        ) : null}
       </div>
       <StatusPill order={o} />
     </div>
@@ -259,6 +269,29 @@ function TodoCard({ order: o, agentKey: key, onChange }: { order: Order; agentKe
   };
 
   const payout = o.payoutNgn ?? o.ngn;
+
+  /**
+   * Top-up: the server checks the chain and takes a lock before Nimiq Pay opens,
+   * so a double tap or a second phone can't send the same NIM twice.
+   */
+  const sendNim = async (retry: boolean) => {
+    await api('/api/agent', { method: 'POST', agentKey: key, json: { action: 'nim_sending', id: o.id, retry } });
+    let hash: unknown;
+    try {
+      hash = await payWithMemo(o.wallet, o.nim, o.memo);
+    } catch (e) {
+      // Only release the lock when Nimiq Pay is sure nothing left the wallet.
+      if (definitelyNotSent(e)) await api('/api/agent', { method: 'POST', agentKey: key, json: { action: 'nim_cancelled', id: o.id } }).catch(() => {});
+      throw e;
+    }
+    try {
+      localStorage.setItem(sentKey, '1');
+    } catch {
+      /* ignore */
+    }
+    setSent(true);
+    await api('/api/agent', { method: 'POST', agentKey: key, json: { action: 'nim_sent', id: o.id, hash: String(hash) } });
+  };
 
   return (
     <Card className={cx('overflow-hidden', o.status === 'disputed' && 'border-danger/40')}>
@@ -308,29 +341,19 @@ function TodoCard({ order: o, agentKey: key, onChange }: { order: Order; agentKe
           </p>
           <p className="mt-2 font-mono text-[12px] text-ink-3">To {f.shortAddress(o.wallet)}</p>
           {err && <p className="mt-2 text-[13px] text-danger">{err}</p>}
-          {sent ? (
-            <p className="mt-3 flex items-center gap-2 rounded-2xl bg-paper-2 p-3 text-[14px] text-ink-2">
-              <Spinner className="h-4 w-4" /> Sent. Waiting for the chain to confirm…
-            </p>
+          {sent || o.sendStartedAt ? (
+            <>
+              <p className="mt-3 flex items-center gap-2 rounded-2xl bg-paper-2 p-3 text-[14px] text-ink-2">
+                <Spinner className="h-4 w-4" /> Sent. Waiting for the chain to confirm…
+              </p>
+              {o.sendStartedAt && Date.now() - o.sendStartedAt > SEND_LOCK_MS && (
+                <Button size="md" variant="ghost" className="mt-2 w-full" loading={busy} onClick={() => act(() => sendNim(true))}>
+                  Not in your Nimiq Pay history? Send again
+                </Button>
+              )}
+            </>
           ) : (
-            <Button
-              size="md"
-              variant="gold"
-              className="mt-3 w-full"
-              loading={busy}
-              onClick={() =>
-                act(async () => {
-                  const hash = await payWithMemo(o.wallet, o.nim, o.memo);
-                  try {
-                    localStorage.setItem(sentKey, '1');
-                  } catch {
-                    /* ignore */
-                  }
-                  setSent(true);
-                  await api('/api/agent', { method: 'POST', agentKey: key, json: { action: 'nim_sent', id: o.id, hash: String(hash) } });
-                })
-              }
-            >
+            <Button size="md" variant="gold" className="mt-3 w-full" loading={busy} onClick={() => act(() => sendNim(false))}>
               Send {f.nim(o.nim)} with Nimiq Pay
             </Button>
           )}

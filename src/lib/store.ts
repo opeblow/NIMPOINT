@@ -10,6 +10,12 @@ interface Store {
   set<T>(key: string, value: T, ttlSec?: number): Promise<void>;
   /** Set only if missing. Returns true if it was set. */
   setNx(key: string, value: string, ttlSec: number): Promise<boolean>;
+  /**
+   * Write `value` only if the counter at `verKey` still equals `expected`
+   * (a missing counter counts as 0), then set the counter to `expected + 1`.
+   * Atomic. Returns false if someone else wrote first.
+   */
+  casSet<T>(key: string, verKey: string, expected: number, value: T, ttlSec: number): Promise<boolean>;
   del(key: string): Promise<void>;
   lpush(key: string, value: string): Promise<void>;
   lrange(key: string, start: number, stop: number): Promise<string[]>;
@@ -21,6 +27,14 @@ interface Store {
 /** Every key is prefixed, so NimPoint can share a Redis database with other apps safely. */
 const P = 'nimpoint:';
 
+const CAS_SCRIPT = `
+local cur = redis.call('GET', KEYS[2])
+if (cur or '0') ~= ARGV[1] then return 0 end
+redis.call('SET', KEYS[1], ARGV[2], 'EX', ARGV[3])
+redis.call('SET', KEYS[2], ARGV[4], 'EX', ARGV[3])
+return 1
+`;
+
 function redisStore(url: string, token: string): Store {
   const r = new Redis({ url, token });
   return {
@@ -31,6 +45,10 @@ function redisStore(url: string, token: string): Store {
     },
     async setNx(k, v, ttl) {
       return (await r.set(P + k, v, { nx: true, ex: ttl })) === 'OK';
+    },
+    async casSet(k, verKey, expected, v, ttl) {
+      const res = await r.eval(CAS_SCRIPT, [P + k, P + verKey], [String(expected), JSON.stringify(v), String(ttl), String(expected + 1)]);
+      return Number(res) === 1;
     },
     async del(k) {
       await r.del(P + k);
@@ -71,6 +89,14 @@ function memoryStore(): Store {
     async setNx(k, v, ttl) {
       if (live(k)) return false;
       m.set(k, { v, exp: Date.now() + ttl * 1000 });
+      return true;
+    },
+    // No await between the check and the writes, so this is atomic in one process.
+    async casSet(k, verKey, expected, v, ttl) {
+      if (Number(live(verKey)?.v ?? 0) !== expected) return false;
+      const exp = Date.now() + ttl * 1000;
+      m.set(k, { v: clone(v), exp });
+      m.set(verKey, { v: expected + 1, exp });
       return true;
     },
     async del(k) {

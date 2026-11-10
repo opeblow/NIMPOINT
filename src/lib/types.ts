@@ -64,6 +64,14 @@ export interface Order {
   comment?: string;
   events: OrderEvent[];
   lastSyncAt?: number;
+  /** Version for safe concurrent saves. Bumped on every save. */
+  v?: number;
+  /** More payments that carried this order's memo after it was already paid. Someone owes a refund. */
+  extraPayments?: OnchainTx[];
+  /** Top-up: when the agent opened Nimiq Pay to send NIM. Blocks a second send. */
+  sendStartedAt?: number;
+  /** Given only to the order's creator. Needed to confirm, rate or dispute. Never shown publicly. */
+  secret?: string;
 }
 
 export interface PublicAgent {

@@ -78,18 +78,21 @@ const toChainTx = (t: RawTx): ChainTx => ({
   confirmations: t.confirmations,
 });
 
+/** A payment counts only once it is in a block (pending transactions can still vanish). */
+const confirmed = (t: RawTx) => t.confirmations === undefined || t.confirmations >= 1;
+
 export async function getTransaction(hash: string): Promise<ChainTx | null> {
   const t = await rpc<RawTx | null>('getTransactionByHash', [hash]).catch((e) => {
     if (e instanceof RpcUnavailable) throw e;
     return null;
   });
-  return t && t.executionResult !== false ? toChainTx(t) : null;
+  return t && t.executionResult !== false && confirmed(t) ? toChainTx(t) : null;
 }
 
 /** Latest successful transactions touching an address, newest first. */
 export async function recentTransactions(address: string, max = 100): Promise<ChainTx[]> {
   const txs = await rpc<RawTx[]>('getTransactionsByAddress', [friendlyAddress(address), max, null]);
-  return (txs ?? []).filter((t) => t.executionResult !== false).map(toChainTx);
+  return (txs ?? []).filter((t) => t.executionResult !== false && confirmed(t)).map(toChainTx);
 }
 
 interface RawAccount {
