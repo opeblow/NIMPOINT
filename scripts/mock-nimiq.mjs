@@ -38,8 +38,11 @@ createServer(async (req, res) => {
       return ok(txs.filter((t) => norm(t.to) === a || norm(t.from) === a).slice(0, params[1] ?? 100));
     }
     case 'getAccountByAddress': {
-      const owner = htlcOwners.get(norm(params[0]));
-      return ok(owner ? { type: 'htlc', balance: 0, sender: owner } : { type: 'basic', balance: 0 });
+      const a = norm(params[0]);
+      const owner = htlcOwners.get(a);
+      if (owner) return ok({ type: 'htlc', balance: 0, sender: owner });
+      const balance = txs.reduce((s, t) => s + (norm(t.to) === a ? t.value : 0) - (norm(t.from) === a ? t.value : 0), 0);
+      return ok({ type: 'basic', balance: Math.max(0, balance) });
     }
     default: return reply({ jsonrpc: '2.0', id, error: { code: -32601, message: 'not mocked' } });
   }

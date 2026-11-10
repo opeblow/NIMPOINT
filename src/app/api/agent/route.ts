@@ -1,10 +1,12 @@
 import { z } from 'zod';
 import { agentByKey } from '@/lib/agents';
+import { bondConfig } from '@/lib/bond';
 import {
   cancelAgentSend,
   getOrder,
   isOnline,
   markPayoutSent,
+  netOf,
   ordersForAgent,
   publicAgent,
   publicOrder,
@@ -36,16 +38,20 @@ async function authAgent(req: Request) {
 
 async function dashboard(agentId: string) {
   const orders = await ordersForAgent(agentId);
-  // Keep recent orders fresh so the agent sees payments (and duplicate payments) land without refreshing.
-  return Promise.all(orders.map((o) => (Date.now() - o.createdAt < 24 * 3600_000 ? syncOrder(o) : o)));
+  // Keeps orders fresh so the agent sees payments (and duplicate payments) land without refreshing.
+  // Old orders cost nothing here: the sync returns at once and only closes what is due to close.
+  return Promise.all(orders.map((o) => syncOrder(o)));
 }
 
 export async function GET(req: Request) {
   try {
     const { agent, error } = await authAgent(req);
     if (!agent) return error;
-    const [info, orders] = await Promise.all([publicAgent(agent), dashboard(agent.id)]);
-    return ok({ agent: info, orders: orders.map((o) => publicOrder(o, true)) });
+    const orders = await dashboard(agent.id);
+    // An agent who has only ever served test wallets sees their test record, clearly marked.
+    const net = orders.some((o) => netOf(o) === 'mainnet') || !orders.length ? 'mainnet' : 'testnet';
+    const [info, bondView] = await Promise.all([publicAgent(agent, net), bondConfig() ? publicAgent(agent, bondConfig()!.network) : null]);
+    return ok({ agent: info, statsNetwork: net, bond: bondView?.bond ?? null, orders: orders.map((o) => publicOrder(o, true)) });
   } catch (err) {
     return handle(err);
   }

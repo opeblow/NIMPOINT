@@ -42,6 +42,11 @@ jobs:
       AGENT_BANK_ACCOUNT: '9876543210'
       AGENT_BANK_ACCOUNT_NAME: Yaba Agent
       TELEGRAM_WEBHOOK_SECRET: ci-secret
+      NIMIQ_TESTNET_RPC_URL: http://localhost:8649
+      RPC_TEST: http://localhost:8649
+      BOND_ADDRESS: NQ88 HHHH HHHH HHHH HHHH HHHH HHHH HHHH HHHH
+      AUTO_COMPLETE_MS: '6000'
+      ADMIN_KEY: ci-admin-key-123
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -56,6 +61,7 @@ jobs:
       - name: Start mock Nimiq node and app
         run: |
           PORT=8648 node scripts/mock-nimiq.mjs &
+          PORT=8649 node scripts/mock-nimiq.mjs &
           npx next start -p 3100 &
           npx --yes wait-on@8 http://localhost:3100/api/agents --timeout 60000
       - run: APP=http://localhost:3100 RPC=http://localhost:8648 npm run test:e2e

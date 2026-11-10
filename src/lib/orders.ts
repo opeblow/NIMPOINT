@@ -1,12 +1,14 @@
 import 'server-only';
 import { createHash, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
 import { getAgent, listAgents, supports, type Agent } from './agents';
-import { LIMITS, MEMO_PREFIX, QUOTE_TTL_MS } from './config';
-import { getTransaction, normalizeAddress, recentTransactions, sameAddress, type ChainTx } from './nimiq-rpc';
+import { bondConfig, bondNim } from './bond';
+import { bondMemo, LIMITS, MEMO_PREFIX, QUOTE_TTL_MS, type Network } from './config';
+import { ngn as fmtNgn } from './format';
+import { getTransaction, normalizeAddress, recentTransactions, sameAddress, testnetEnabled, type ChainTx } from './nimiq-rpc';
 import { agentRate, getQuote, nimFor } from './rates';
 import { persistent, store } from './store';
 import { alertAgent } from './telegram';
-import type { AgentStats, BankAccount, Order, OrderKind, OrderStatus, PayoutMode, PublicAgent } from './types';
+import type { AgentStats, BankAccount, Bond, Order, OrderKind, OrderStatus, PayoutMode, PublicAgent } from './types';
 import { verifyNimiqMessage } from './signature';
 
 export class OrderError extends Error {
@@ -34,7 +36,7 @@ const K = {
   idem: (w: string, key: string) => `idem:${normalizeAddress(w)}:${key}`,
   alert: (what: string) => `alert:${what}`,
   online: (a: string) => `agent:online:${a}`,
-  stats: (a: string) => `agent:stats:${a}`,
+  stats: (a: string, net: Network = 'mainnet') => (net === 'mainnet' ? `agent:stats:${a}` : `agent:stats:${net}:${a}`),
 };
 
 const ORDER_TTL = 60 * 60 * 24 * 365;
@@ -43,12 +45,20 @@ const LATE_PAYMENT_WINDOW_MS = 24 * 3600 * 1000;
 const SYNC_THROTTLE_MS = 4_000;
 /** Paid orders are still watched for duplicate payments, just less often. */
 const EXTRA_THROTTLE_MS = 60_000;
+/**
+ * A finished-looking order closes by itself after this long if the customer neither confirms nor reports a problem,
+ * so a silent customer can't hold an honest agent's record (or bond) hostage.
+ */
+const AUTO_COMPLETE_MS = Number(process.env.AUTO_COMPLETE_MS) || 24 * 3600 * 1000;
 /** How long an agent's started NIM send blocks another send. */
 export const SEND_LOCK_MS = 10 * 60_000;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export const getOrder = (id: string) => store.get<Order>(K.order(id.toUpperCase()));
+
+/** Orders made before networks were recorded were all mainnet. */
+export const netOf = (o: Pick<Order, 'network'>): Network => o.network ?? 'mainnet';
 
 /** Save only if nobody saved this order since we read it. */
 async function save(order: Order) {
@@ -109,13 +119,16 @@ export async function setOnline(agentId: string, online: boolean) {
   await store.set(K.online(agentId), online ? '1' : '0');
 }
 
-export async function agentStats(agentId: string): Promise<AgentStats> {
-  const cached = await store.get<AgentStats & { at: number }>(K.stats(agentId));
+const agentOrders = async (agentId: string, net: Network) =>
+  ((await Promise.all((await store.lrange(K.byAgent(agentId), 0, 300)).map(getOrder))).filter(Boolean) as Order[]).filter((o) => netOf(o) === net);
+
+export async function agentStats(agentId: string, net: Network = 'mainnet'): Promise<AgentStats> {
+  const cached = await store.get<AgentStats & { at: number }>(K.stats(agentId, net));
   if (cached && Date.now() - cached.at < 60_000) return cached;
 
-  const ids = await store.lrange(K.byAgent(agentId), 0, 300);
-  const orders = (await Promise.all(ids.map(getOrder))).filter(Boolean) as Order[];
-  const done = orders.filter((o) => o.status === 'completed');
+  const orders = await agentOrders(agentId, net);
+  // An order NimPoint had to refund from the bond is not a job well done.
+  const done = orders.filter((o) => o.status === 'completed' && o.resolution !== 'refunded');
   const ratings = done.map((o) => o.rating).filter((r): r is number => typeof r === 'number');
   const payoutMins = done
     .map((o) => {
@@ -132,12 +145,39 @@ export async function agentStats(agentId: string): Promise<AgentStats> {
     ratingCount: ratings.length,
     medianPayoutMins: payoutMins.length ? payoutMins[Math.floor(payoutMins.length / 2)] : null,
   };
-  await store.set(K.stats(agentId), { ...stats, at: Date.now() }, 3600);
+  await store.set(K.stats(agentId, net), { ...stats, at: Date.now() }, 3600);
   return stats;
 }
 
-export async function publicAgent(a: Agent): Promise<PublicAgent> {
-  const [online, stats] = await Promise.all([isOnline(a.id), agentStats(a.id)]);
+/* ───────────────────────────── bond ───────────────────────────── */
+
+/** A cash-out the agent has been paid for on-chain but has not finished paying out. */
+const owesNaira = (o: Order) => o.kind === 'cashout' && Boolean(o.tx) && ['paid', 'payout_sent', 'disputed'].includes(o.status);
+
+/**
+ * The agent's bond and how much of it is free. Null when bonds are off or kept on the other network.
+ * Only cash-outs count against it: there the chain proves the agent holds the customer's NIM.
+ */
+export async function agentBond(agent: Agent, net: Network, fresh = false): Promise<Bond | null> {
+  const cfg = bondConfig();
+  if (!cfg || cfg.network !== net) return null;
+  const [nim, quote, orders] = await Promise.all([bondNim(agent.id, fresh), getQuote(), agentOrders(agent.id, net)]);
+  const open = await Promise.all(orders.filter(owesNaira).map(autoComplete));
+  const exposureNgn = open.filter(owesNaira).reduce((s, o) => s + (o.payoutNgn ?? o.ngn), 0);
+  const ngn = Math.floor(nim * quote.mid);
+  return { address: cfg.address, memo: bondMemo(agent.id), network: net, nim, ngn, exposureNgn, availableNgn: Math.max(0, ngn - exposureNgn) };
+}
+
+export async function publicAgent(a: Agent, net: Network = 'mainnet'): Promise<PublicAgent> {
+  const [online, stats, bond] = await Promise.all([
+    isOnline(a.id),
+    agentStats(a.id, net),
+    // If the chain can't be read, show the bond as empty rather than hide the agent or guess.
+    agentBond(a, net).catch(() => {
+      const cfg = bondConfig();
+      return cfg && cfg.network === net ? { address: cfg.address, memo: bondMemo(a.id), network: net, nim: 0, ngn: 0, exposureNgn: 0, availableNgn: 0 } : null;
+    }),
+  ]);
   return {
     id: a.id,
     name: a.name,
@@ -151,10 +191,11 @@ export async function publicAgent(a: Agent): Promise<PublicAgent> {
     telegram: a.telegram,
     online,
     stats,
+    bond,
   };
 }
 
-export const publicAgents = () => Promise.all(listAgents().map(publicAgent));
+export const publicAgents = (net: Network = 'mainnet') => Promise.all(listAgents().map((a) => publicAgent(a, net)));
 
 /* ───────────────────────────── create ───────────────────────────── */
 
@@ -183,6 +224,7 @@ export async function createOrder(input: {
   wallet: string;
   ngn: number;
   bank?: BankAccount;
+  network?: Network;
   /** Same key on a retry returns the same order instead of making a new one. */
   idempotencyKey?: string;
 }): Promise<Order> {
@@ -192,7 +234,8 @@ export async function createOrder(input: {
   if (!agent) throw new OrderError('That NimPoint is no longer available. Pick another one.');
   if (!supports(agent, input.kind, input.mode)) throw new OrderError(`${agent.name} doesn't offer this option.`);
 
-  const fp = fingerprint([input.kind, input.mode, agent.id, normalizeAddress(input.wallet), Math.round(input.ngn), input.bank?.bankCode, input.bank?.accountNumber]);
+  const net = input.network ?? 'mainnet';
+  const fp = fingerprint([input.kind, input.mode, agent.id, normalizeAddress(input.wallet), Math.round(input.ngn), input.bank?.bankCode, input.bank?.accountNumber, net]);
   const idemKey = input.idempotencyKey ? K.idem(input.wallet, input.idempotencyKey) : null;
   // A retry is answered before any other check: the order already exists.
   if (idemKey && (await store.get<string>(idemKey))) return replayCreate(idemKey, fp);
@@ -206,6 +249,19 @@ export async function createOrder(input: {
     throw new OrderError('Add the bank account to receive your Naira.');
   }
   if (sameAddress(input.wallet, agent.address)) throw new OrderError("You can't trade with your own NimPoint.");
+  if (net === 'testnet' && !testnetEnabled()) throw new OrderError('Your Nimiq Pay is on the test network. Switch it to mainnet to use NimPoint.');
+  // Read the bond straight from the chain: an order must never rest on a stale number.
+  const bond = await agentBond(agent, net, true);
+  if (bond) {
+    if (bond.nim <= 0) throw new OrderError(`${agent.name} has not posted a bond yet, so it can't take orders. Pick another NimPoint.`);
+    if (input.kind === 'cashout' && input.ngn > bond.availableNgn) {
+      throw new OrderError(
+        bond.availableNgn >= LIMITS.minNgn
+          ? `${agent.name} can take up to ${fmtNgn(bond.availableNgn)} right now. Try a smaller amount or another NimPoint.`
+          : `${agent.name}'s bond is fully in use right now. Try again shortly or pick another NimPoint.`,
+      );
+    }
+  }
 
   if (idemKey && !(await store.setNx(idemKey, `${fp}:pending`, IDEM_TTL))) return replayCreate(idemKey, fp);
   try {
@@ -236,6 +292,7 @@ export async function createOrder(input: {
       expiresAt: now + QUOTE_TTL_MS,
       events: [],
       secret: randomBytes(24).toString('hex'),
+      network: net,
     };
     transition(order, order.status);
 
@@ -300,6 +357,32 @@ function recordExtras(order: Order, txs: ChainTx[]): boolean {
  * duplicate payments for 24 hours.
  */
 export async function syncOrder(order: Order, force = false): Promise<Order> {
+  return autoComplete(await chainSync(order, force));
+}
+
+const autoCompleteDue = (o: Order) => {
+  const last = o.kind === 'cashout' ? 'payout_sent' : 'paid';
+  if (o.status !== last) return false;
+  const at = [...o.events].reverse().find((e) => e.status === last)?.at;
+  return Boolean(at) && Date.now() - at! >= AUTO_COMPLETE_MS;
+};
+
+/**
+ * Close an order nobody confirmed. Cash-out: the agent marked the Naira sent and the customer
+ * reported no problem in time. Top-up: the NIM is verified on-chain in the customer's wallet.
+ */
+export async function autoComplete(order: Order): Promise<Order> {
+  if (!autoCompleteDue(order)) return order;
+  const next = await update(order.id, (o) => {
+    if (!autoCompleteDue(o)) return false;
+    o.autoCompleted = true;
+    transition(o, 'completed', 'Completed automatically: no problem was reported');
+  });
+  await store.del(K.stats(next.agentId, netOf(next)));
+  return next;
+}
+
+async function chainSync(order: Order, force: boolean): Promise<Order> {
   const now = Date.now();
   if (now - order.createdAt > LATE_PAYMENT_WINDOW_MS) return order;
   const waiting = awaitingNim(order);
@@ -310,7 +393,7 @@ export async function syncOrder(order: Order, force = false): Promise<Order> {
   let txs: ChainTx[] | null = null;
   try {
     // Oldest first: the first payment settles the order, later ones are extras.
-    txs = (await recentTransactions(order.nimRecipient, 50)).filter((t) => forOrder(order, t)).sort((a, b) => a.timestamp - b.timestamp);
+    txs = (await recentTransactions(order.nimRecipient, 50, netOf(order))).filter((t) => forOrder(order, t)).sort((a, b) => a.timestamp - b.timestamp);
   } catch (err) {
     console.warn('[sync]', order.id, (err as Error).message);
   }
@@ -330,7 +413,7 @@ export async function syncOrder(order: Order, force = false): Promise<Order> {
 /** Client reports the hash Nimiq Pay returned. We check it directly, then fall back to the memo scan. */
 export async function reportTransaction(order: Order, hash: string): Promise<Order> {
   if (/^[0-9a-f]{64}$/i.test(hash)) {
-    const tx = await getTransaction(hash).catch(() => null);
+    const tx = await getTransaction(hash, netOf(order)).catch(() => null);
     if (tx && forOrder(order, tx)) {
       const next = await update(order.id, async (o) => {
         if (o.tx?.hash.toLowerCase() === tx.hash.toLowerCase()) return false;
@@ -411,7 +494,7 @@ export async function confirmReceived(
     if (receipt) o.receipt = { ...receipt, verified };
     transition(o, 'completed');
   });
-  await store.del(K.stats(next.agentId));
+  await store.del(K.stats(next.agentId, netOf(next)));
   return next;
 }
 
@@ -422,7 +505,7 @@ export async function rateOrder(order: Order, stars: number, comment?: string) {
     o.rating = Math.max(1, Math.min(5, Math.round(stars)));
     o.comment = comment?.slice(0, 280);
   });
-  await store.del(K.stats(next.agentId));
+  await store.del(K.stats(next.agentId, netOf(next)));
   return next;
 }
 
@@ -433,6 +516,38 @@ export async function disputeOrder(order: Order, note?: string) {
   });
   await alertOnce(next, `disputed:${next.id}`, (a) => alertAgent(a, next, 'disputed'));
   return next;
+}
+
+/**
+ * NimPoint closes a reported order after looking into it: either the agent really paid,
+ * or the customer was refunded from the agent's bond. Frees the bond tied to the order.
+ */
+export async function resolveDispute(order: Order, outcome: 'agent_paid' | 'refunded', note?: string) {
+  const next = await update(order.id, (o) => {
+    if (o.status !== 'disputed') throw new OrderError('Only reported orders can be resolved.');
+    o.resolution = outcome;
+    const what = outcome === 'refunded' ? "Refunded from the agent's bond" : 'Checked by NimPoint: the agent paid';
+    transition(o, 'completed', note ? `${what}. ${note.slice(0, 200)}` : what);
+  });
+  await store.del(K.stats(next.agentId, netOf(next)));
+  return next;
+}
+
+/**
+ * Orders made before the network was recorded: if the payment is missing on mainnet but
+ * present on the test network, it was a test order. Only ever relabels towards "test".
+ */
+export async function healNetwork(order: Order): Promise<Order> {
+  if (order.network || !order.tx || !testnetEnabled()) return order;
+  try {
+    if (await getTransaction(order.tx.hash, 'mainnet')) return order;
+    if (!(await getTransaction(order.tx.hash, 'testnet'))) return order;
+    return await update(order.id, (o) => {
+      o.network = 'testnet';
+    });
+  } catch {
+    return order;
+  }
 }
 
 /* ───────────────────────────── listings ───────────────────────────── */

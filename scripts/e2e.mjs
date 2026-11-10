@@ -1,8 +1,17 @@
 // End-to-end test of every order path against a running app + mock Nimiq node.
 // Usage: APP=http://localhost:3100 RPC=http://localhost:8648 AGENT_KEY=... node scripts/e2e.mjs
+// Optional, to cover more: BOND_ADDRESS (agent bonds), AUTO_COMPLETE_MS (auto-complete), ADMIN_KEY (dispute resolution),
+// RPC_TEST (a second mock node the app uses as the Nimiq test network). Each must match the app's own environment.
+import { createHash, generateKeyPairSync, sign } from 'node:crypto';
+import { blake2b } from '@noble/hashes/blake2b';
+
 const APP = process.env.APP ?? 'http://localhost:3100';
 const RPC = process.env.RPC ?? 'http://localhost:8648';
+const RPC_TEST = process.env.RPC_TEST;
 const KEY = process.env.AGENT_KEY ?? 'test-agent-key-123';
+const BOND = process.env.BOND_ADDRESS;
+const AUTO_MS = Number(process.env.AUTO_COMPLETE_MS) || 0;
+const ADMIN = process.env.ADMIN_KEY;
 
 const AGENT = 'NQ11 AAAA AAAA AAAA AAAA AAAA AAAA AAAA AAAA';
 const USER1 = 'NQ22 BBBB BBBB BBBB BBBB BBBB BBBB BBBB BBBB';
@@ -19,7 +28,7 @@ const check = (cond, msg, extra) => (cond ? (passed++, console.log(`✓ ${msg}`)
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const secrets = new Map(); // order id -> secret, as the creator's phone keeps it
-async function call(path, { method = 'GET', json, key, noToken } = {}) {
+async function call(path, { method = 'GET', json, key, noToken, admin } = {}) {
   const id = path.match(/^\/api\/orders\/([A-Z0-9]+)/)?.[1];
   const token = id && !noToken ? secrets.get(id) : undefined;
   const res = await fetch(APP + path, {
@@ -27,6 +36,7 @@ async function call(path, { method = 'GET', json, key, noToken } = {}) {
     headers: {
       ...(json ? { 'Content-Type': 'application/json' } : {}),
       ...(key ? { 'x-agent-key': key } : {}),
+      ...(admin ? { 'x-admin-key': admin } : {}),
       ...(token ? { 'x-order-token': token } : {}),
     },
     body: json ? JSON.stringify(json) : undefined,
@@ -35,8 +45,9 @@ async function call(path, { method = 'GET', json, key, noToken } = {}) {
   if (body.order?.secret) secrets.set(body.order.id, body.order.secret);
   return { status: res.status, body };
 }
-const send = async (from, to, nim, data, htlcOwner) =>
-  (await (await fetch(RPC + '/_send', { method: 'POST', body: JSON.stringify({ from, to, value: Math.round(nim * 1e5), data, htlcOwner }) })).json()).hash;
+const send = async (from, to, nim, data, htlcOwner, rpc = RPC) =>
+  (await (await fetch(rpc + '/_send', { method: 'POST', body: JSON.stringify({ from, to, value: Math.round(nim * 1e5), data, htlcOwner }) })).json()).hash;
+const skip = (what, why) => console.log(`- skipped: ${what} (${why})`);
 
 const bank = { bankCode: '058', accountNumber: '0123456789', accountName: 'Ada Lovelace' };
 
@@ -45,6 +56,18 @@ let r = await call('/api/rate');
 check(r.status === 200 && r.body.mid > 0, 'live rate loads', r.body);
 r = await call('/api/agents');
 check(r.body.agents?.length === 1 && r.body.agents[0].online, 'agent listed and online', r.body);
+
+// ── agent bond: no deposit, no orders
+let bondNgn = 0;
+if (BOND) {
+  check(r.body.agents[0].bond && r.body.agents[0].bond.nim === 0, 'agent starts with no bond', r.body.agents[0].bond);
+  r = await call('/api/orders', { method: 'POST', json: { kind: 'cashout', mode: 'bank', agentId: 'yaba-1', wallet: USER1, ngn: 5000, bank } });
+  check(r.status === 400 && /bond/.test(r.body.error), 'agent without a bond gets no orders', r.body);
+  const mid = (await call('/api/rate')).body.mid;
+  // A deposit with the wrong memo is not a bond; the right memo is.
+  await send(AGENT_HTLC, BOND, 50000, 'hello', AGENT);
+  await send(AGENT_HTLC, BOND, Math.ceil(12000 / mid), 'NIMPOINT-BOND-YABA-1', AGENT);
+} else skip('agent bond', 'BOND_ADDRESS not set');
 
 // ── validation
 r = await call('/api/orders', { method: 'POST', json: { kind: 'cashout', mode: 'bank', agentId: 'yaba-1', wallet: USER1, ngn: 20, bank } });
@@ -67,6 +90,11 @@ r = await call('/api/orders', { method: 'POST', json: { kind: 'cashout', mode: '
 check(r.status === 200 && r.body.order.status === 'awaiting_payment', 'cash-out order created', r.body);
 const o1 = r.body.order;
 check(o1.memo === `NIMPOINT-${o1.id}` && o1.nim > 0, 'order has memo and NIM amount');
+if (BOND) {
+  r = await call('/api/agents');
+  bondNgn = r.body.agents[0].bond.ngn;
+  check(bondNgn >= 11900 && bondNgn <= 12200 && r.body.agents[0].bond.exposureNgn === 0, 'bond is read from the chain by memo', r.body.agents[0].bond);
+}
 r = await call('/api/orders', { method: 'POST', json: { kind: 'cashout', mode: 'bank', agentId: 'yaba-1', wallet: USER1, ngn: 5000, bank } });
 check(r.status === 429, 'double-tap within 3s is blocked', r.body);
 
@@ -207,6 +235,17 @@ check(
 r = await call(`/api/orders/${o4.id}`, { method: 'POST', json: { action: 'sync' } });
 check(r.body.order.extraPayments.length === 1, 'duplicate payment recorded once');
 
+// ── the bond caps what the agent can owe at once (o4: ₦4,000 paid on-chain, not yet confirmed)
+const fresh = (c) => `NQ77 ${Array(8).fill(c.repeat(4)).join(' ')}`;
+if (BOND) {
+  r = await call('/api/orders', { method: 'POST', json: { kind: 'cashout', mode: 'bank', agentId: 'yaba-1', wallet: fresh('G'), ngn: 9000, bank } });
+  check(r.status === 400 && /can take up to/.test(r.body.error), 'cash-out bigger than the free bond is refused', r.body);
+  r = await call('/api/orders', { method: 'POST', json: { kind: 'cashout', mode: 'bank', agentId: 'yaba-1', wallet: fresh('H'), ngn: 7000, bank } });
+  check(r.status === 200, 'cash-out within the free bond is accepted', r.body);
+  r = await call('/api/orders', { method: 'POST', json: { kind: 'topup', mode: 'cash', agentId: 'yaba-1', wallet: fresh('J'), ngn: 15000 } });
+  check(r.status === 200, 'top-ups are not capped by the bond', r.body);
+}
+
 // agent top-up send lock
 await sleep(3200);
 r = await call('/api/orders', { method: 'POST', json: { kind: 'topup', mode: 'cash', agentId: 'yaba-1', wallet: USER3, ngn: 2500 } });
@@ -226,5 +265,93 @@ r = await call('/api/agent', { method: 'POST', key: KEY, json: { action: 'nim_se
 check(r.body.order?.status === 'paid', 'agent NIM verified', r.body);
 r = await call('/api/agent', { method: 'POST', key: KEY, json: { action: 'nim_sending', id: o5.id, retry: true } });
 check(r.status === 409 && /already paid/.test(r.body.error), 'no send once the chain shows it paid', r.body);
+
+// ── auto-complete: a silent customer can't keep an order (or the agent's bond) open forever
+if (AUTO_MS && AUTO_MS <= 20_000) {
+  const paidOutAt = (await call(`/api/orders/${o4.id}`)).body.order.events.find((e) => e.status === 'payout_sent').at;
+  await sleep(Math.max(0, paidOutAt + AUTO_MS + 300 - Date.now()));
+  r = await call(`/api/orders/${o4.id}`);
+  check(r.body.order.status === 'completed' && r.body.order.autoCompleted === true, 'unconfirmed payout completes by itself', r.body.order);
+  r = await call(`/api/orders/${o4.id}`, { method: 'POST', json: { action: 'rate', stars: 4 } });
+  check(r.body.order?.rating === 4, 'customer can still rate after auto-complete', r.body);
+  if (BOND) {
+    r = await call('/api/orders', { method: 'POST', json: { kind: 'cashout', mode: 'bank', agentId: 'yaba-1', wallet: fresh('K'), ngn: 9000, bank } });
+    check(r.status === 200, 'auto-complete frees the bond for new orders', r.body);
+  }
+} else skip('auto-complete', 'AUTO_COMPLETE_MS not set to a short test value');
+
+// ── NimPoint resolves a reported order
+if (ADMIN) {
+  r = await call('/api/orders', { method: 'POST', json: { kind: 'cashout', mode: 'cash', agentId: 'yaba-1', wallet: fresh('L'), ngn: 1000 } });
+  const o6 = r.body.order;
+  await send(HTLC1, AGENT, o6.nim, o6.memo, fresh('L'));
+  await call(`/api/orders/${o6.id}`, { method: 'POST', json: { action: 'sync' } });
+  r = await call(`/api/orders/${o6.id}`, { method: 'POST', json: { action: 'dispute', note: 'never paid' } });
+  check(r.body.order?.status === 'disputed', 'paid order reported', r.body);
+  r = await call('/api/admin', { method: 'POST', admin: 'wrong-admin-key', json: { action: 'resolve', id: o6.id, outcome: 'refunded' } });
+  check(r.status === 401, 'admin actions need the admin key', r.body);
+  r = await call('/api/admin', { method: 'POST', admin: ADMIN, json: { action: 'resolve', id: o6.id, outcome: 'refunded', note: 'Refund tx sent' } });
+  check(r.body.order?.status === 'completed' && r.body.order.resolution === 'refunded', 'reported order resolved as refunded from the bond', r.body);
+  r = await call('/api/admin', { method: 'POST', admin: ADMIN, json: { action: 'resolve', id: o6.id, outcome: 'agent_paid' } });
+  check(r.status === 400, 'an order is resolved once');
+} else skip('dispute resolution', 'ADMIN_KEY not set');
+
+// ── registration: a wallet proves it is real by signing
+const BASE32 = '0123456789ABCDEFGHJKLMNPQRSTUVXY';
+function addressOf(pub) {
+  const h = blake2b(pub, { dkLen: 32 }).subarray(0, 20);
+  let bits = '';
+  for (const b of h) bits += b.toString(2).padStart(8, '0');
+  let body = '';
+  for (let i = 0; i < 160; i += 5) body += BASE32[parseInt(bits.slice(i, i + 5), 2)];
+  let mod = 0;
+  for (const c of body + 'NQ00') for (const d of c >= 'A' ? String(c.charCodeAt(0) - 55) : c) mod = (mod * 10 + Number(d)) % 97;
+  return `NQ${String(98 - mod).padStart(2, '0')}${body}`;
+}
+function registration() {
+  const { publicKey, privateKey } = generateKeyPairSync('ed25519');
+  const pub = publicKey.export({ format: 'der', type: 'spki' }).subarray(-32);
+  const wallet = addressOf(pub);
+  const message = `NimPoint registration: I own ${wallet.replace(/(.{4})(?=.)/g, '$1 ')}.`;
+  const bytes = Buffer.from(message, 'utf8');
+  const hash = createHash('sha256').update(Buffer.concat([Buffer.from('\x16Nimiq Signed Message:\n' + bytes.length, 'utf8'), bytes])).digest();
+  return { wallet, message, publicKey: pub.toString('hex'), signature: sign(null, hash, privateKey).toString('hex') };
+}
+const reg = registration();
+const before = (await call('/api/users')).body.count;
+r = await call('/api/users', { method: 'POST', json: reg });
+check(r.status === 200 && r.body.registered && r.body.count === before + 1, 'wallet registers with its own signature', r.body);
+r = await call('/api/users', { method: 'POST', json: reg });
+check(r.body.count === before + 1, 'registering twice counts once', r.body);
+r = await call(`/api/users?wallet=${encodeURIComponent(reg.wallet)}`);
+check(r.body.registered === true, 'registered wallet is recognised');
+r = await call('/api/users', { method: 'POST', json: { ...reg, wallet: USER1, message: 'NimPoint registration: I own NQ22 BBBB BBBB BBBB BBBB BBBB BBBB BBBB BBBB.' } });
+check(r.status === 400, "cannot register someone else's wallet", r.body);
+const other = registration();
+r = await call('/api/users', { method: 'POST', json: { ...reg, signature: other.signature } });
+check(r.status === 400, 'a bad signature is refused', r.body);
+r = await call('/api/proof');
+check(r.body.registeredUsers === before + 1, 'proof page counts registered wallets', r.body.registeredUsers);
+
+// ── test network: works, clearly separate, never counted as real usage
+if (RPC_TEST) {
+  const realOrders = r.body.ledger.orders;
+  const TESTER = fresh('M');
+  r = await call('/api/orders', { method: 'POST', json: { kind: 'cashout', mode: 'cash', agentId: 'yaba-1', wallet: TESTER, ngn: 3000, network: 'testnet' } });
+  check(r.status === 200 && r.body.order.network === 'testnet', 'test-network order is created and labelled', r.body);
+  const o7 = r.body.order;
+  await send(HTLC1, AGENT, o7.nim, o7.memo, TESTER);
+  r = await call(`/api/orders/${o7.id}`, { method: 'POST', json: { action: 'sync' } });
+  check(r.body.order.status === 'awaiting_payment', 'a mainnet payment does not pay a test-network order', r.body.order);
+  await send(HTLC1, AGENT, o7.nim, o7.memo, TESTER, RPC_TEST);
+  r = await call(`/api/orders/${o7.id}`, { method: 'POST', json: { action: 'sync' } });
+  check(r.body.order.status === 'paid', 'test-network payment is found on the test network', r.body.order);
+  // The proof page is cached for a minute; a new registration refreshes it.
+  await call('/api/users', { method: 'POST', json: other });
+  r = await call('/api/proof');
+  check(r.body.ledger.orders === realOrders && r.body.otherNetworkOrders === 1, 'test orders are not counted as real usage', r.body.ledger);
+  r = await call('/api/proof?network=testnet');
+  check(r.body.network === 'testnet' && r.body.ledger.orders === 1, 'test orders are listed on their own page', r.body.ledger);
+} else skip('test network', 'RPC_TEST not set');
 
 console.log(`\nAll ${passed} checks passed.`);

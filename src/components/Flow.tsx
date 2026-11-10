@@ -9,12 +9,13 @@ import { BANKS } from '@/lib/banks';
 import { LIMITS } from '@/lib/config';
 import * as f from '@/lib/format';
 import { acceptTerms, forgetAccount, lastAgent, rememberAccount, rememberAgent, rememberOrderToken, savedAccounts, termsAccepted, type SavedAccount } from '@/lib/local';
-import { useWallet } from '@/lib/nimiq-client';
+import { hostNetwork, useWallet } from '@/lib/nimiq-client';
 import type { Order, OrderKind, PayoutMode, PublicAgent, Quote } from '@/lib/types';
 import CoinStage from './CoinStage';
 import { applyKey, Keypad } from './Keypad';
 import { OpenInNimiqPay } from './OpenInNimiqPay';
 import { RecentOrders } from './RecentOrders';
+import { RegisterCard } from './RegisterCard';
 import { Button, Card, cx, Notice, RollingNumber, Segmented, Stars, Wordmark } from './ui';
 
 function newIdempotencyKey() {
@@ -67,7 +68,7 @@ export function Flow() {
         .catch((e: Error) => alive && setQuoteError(e.message));
     void load();
     const t = setInterval(load, 30_000);
-    fetchAgents()
+    fetchAgents(hostNetwork())
       .then((r) => alive && setAgents(r.agents))
       .catch(() => alive && setAgents([]));
     return () => {
@@ -146,6 +147,7 @@ export function Flow() {
         wallet: wallet.address,
         ngn: ngnValue,
         bank: kind === 'cashout' && mode === 'bank' ? bank : undefined,
+        network: wallet.network,
       };
       // Same order details → same key, so a retry on a slow network returns the same order.
       const sig = JSON.stringify(body);
@@ -249,6 +251,10 @@ export function Flow() {
                 </div>
               </section>
 
+              {wallet.network === 'testnet' && (
+                <p className="mt-3 rounded-2xl bg-gold-soft px-3 py-2 text-center text-[13px] font-medium text-gold-deep">Test network. This NIM has no real value.</p>
+              )}
+
               <div className="mt-4">
                 <Segmented
                   id="kind"
@@ -311,6 +317,7 @@ export function Flow() {
                 Continue
               </Button>
 
+              <RegisterCard wallet={wallet.address} network={wallet.network} />
               <RecentOrders wallet={wallet.address} />
 
               <footer className="mt-6 flex items-center justify-center gap-4 pb-2 text-[13px] text-ink-3">
@@ -402,7 +409,10 @@ export function Flow() {
                 .map((a) => {
                   const aRate = quote ? rateFor(quote.mid, kind, kind === 'cashout' ? a.cashoutSpreadBps : a.topupSpreadBps) : null;
                   const tooBig = ngnValue > a.maxNgn;
-                  const disabled = !a.online || tooBig;
+                  // With bonds on, an agent takes no order without one, and no cash-out bigger than what is free.
+                  const noBond = !!a.bond && a.bond.nim <= 0;
+                  const overBond = !!a.bond && !noBond && kind === 'cashout' && ngnValue > a.bond.availableNgn;
+                  const disabled = !a.online || tooBig || noBond || overBond;
                   return (
                     <motion.button
                       key={a.id}
@@ -445,10 +455,26 @@ export function Flow() {
                         <Stat label="Completed">{a.stats.completed}</Stat>
                         <Stat label="Typical payout">{a.stats.medianPayoutMins !== null ? `${Math.max(1, Math.round(a.stats.medianPayoutMins))} min` : '—'}</Stat>
                       </div>
+                      {a.bond && (
+                        <p className="mt-3 flex items-center gap-1.5 text-[13px] text-ink-2">
+                          <Shield />
+                          {noBond ? (
+                            'No bond posted yet'
+                          ) : (
+                            <span>
+                              Bond <b className="text-ink tabular">{f.ngn(a.bond.ngn)}</b> on-chain{kind === 'cashout' ? ' · protects your cash-out' : ''}
+                            </span>
+                          )}
+                        </p>
+                      )}
                       {aRate && ngnValue > 0 && (
                         <p className="mt-3 rounded-2xl bg-paper-2 px-3 py-2 text-[14px] tabular text-ink-2">
                           {tooBig ? (
                             `Up to ${f.ngn(a.maxNgn)} per order`
+                          ) : noBond ? (
+                            'Cannot take orders until it posts a bond'
+                          ) : overBond ? (
+                            `Can take up to ${f.ngn(a.bond!.availableNgn)} right now`
                           ) : (
                             <>
                               {kind === 'cashout' ? 'You send' : 'You get'} <b className="text-ink">{f.nim(nimFor(ngnValue, aRate, kind))}</b> · {f.rate(aRate)}/NIM
@@ -575,6 +601,11 @@ export function Flow() {
                   <ul className="mt-4 space-y-2 px-1 text-[13px] leading-snug text-ink-2">
                     <Li>Your NIM goes wallet-to-wallet to {agent.name}. NimPoint never holds your money.</Li>
                     <Li>The payment is verified on the Nimiq blockchain before the agent pays out.</Li>
+                    {agent.bond && agent.bond.nim > 0 && kind === 'cashout' && (
+                      <Li>
+                        {agent.name} has a bond of {f.ngn(agent.bond.ngn)} locked on-chain. If you pay and are not paid, NimPoint refunds you from it.
+                      </Li>
+                    )}
                     <Li>Rate held for 30 minutes. If something goes wrong, you can report it from the order page.</Li>
                   </ul>
 
@@ -642,6 +673,15 @@ function AddressButton({ address }: { address: string }) {
       <span className="h-2 w-2 rounded-full bg-naira" />
       <span className="font-mono tabular">{copied ? 'Address copied' : f.shortAddress(address)}</span>
     </button>
+  );
+}
+
+function Shield() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0 text-naira" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 3 5 6v5c0 4.5 3 8.3 7 10 4-1.7 7-5.5 7-10V6z" />
+      <path d="m9.5 12 2 2 3.5-4" />
+    </svg>
   );
 }
 

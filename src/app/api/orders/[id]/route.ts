@@ -4,6 +4,7 @@ import {
   confirmReceived,
   disputeOrder,
   getOrder,
+  netOf,
   ownsOrder,
   markFiatSent,
   publicAgent,
@@ -23,7 +24,7 @@ async function view(order: Order) {
   const agent = getAgent(order.agentId);
   return {
     order: publicOrder(order),
-    agent: agent ? await publicAgent(agent) : null,
+    agent: agent ? await publicAgent(agent, netOf(order)) : null,
     // Top-up by bank: the user needs to know where to send Naira.
     agentBank: order.kind === 'topup' && order.mode === 'bank' ? agent?.bank ?? null : null,
   };

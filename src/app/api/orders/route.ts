@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { createOrder, ordersForWallet, publicOrder } from '@/lib/orders';
+import { autoComplete, createOrder, ordersForWallet, publicOrder } from '@/lib/orders';
 import { handle, ok } from '@/lib/http';
 import { bankName } from '@/lib/banks';
 
@@ -16,6 +16,7 @@ const CreateSchema = z.object({
   agentId: z.string().min(1),
   wallet: nimiqAddress,
   ngn: z.number().int().positive(),
+  network: z.enum(['mainnet', 'testnet']).default('mainnet'),
   bank: z
     .object({
       bankCode: z.string().min(3),
@@ -46,7 +47,7 @@ export async function POST(req: Request) {
 export async function GET(req: Request) {
   try {
     const wallet = nimiqAddress.parse(new URL(req.url).searchParams.get('wallet') ?? '');
-    const orders = await ordersForWallet(wallet);
+    const orders = await Promise.all((await ordersForWallet(wallet)).map(autoComplete));
     return ok({ orders: orders.map((o) => publicOrder(o)) });
   } catch (err) {
     return handle(err);

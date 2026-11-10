@@ -39,7 +39,7 @@ export interface OrderView {
 }
 
 export const fetchQuote = () => api<Quote>('/api/rate');
-export const fetchAgents = () => api<{ agents: PublicAgent[] }>('/api/agents');
+export const fetchAgents = (network: 'mainnet' | 'testnet' = 'mainnet') => api<{ agents: PublicAgent[] }>(`/api/agents?network=${network}`);
 export const fetchOrder = (id: string) => api<OrderView>(`/api/orders/${id}`);
 export const orderAction = (id: string, json: Record<string, unknown>) => {
   const token = orderToken(id);

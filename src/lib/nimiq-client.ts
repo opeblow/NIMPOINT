@@ -2,9 +2,12 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { getHostNetwork, init, NimiqProviderError, type NimiqProvider } from '@nimiq/mini-app-sdk';
-import { LUNA_PER_NIM } from './config';
+import { LUNA_PER_NIM, type Network } from './config';
 
 export type WalletStatus = 'connecting' | 'ready' | 'outside' | 'denied';
+
+/** The Nimiq network this Nimiq Pay is on. Outside Nimiq Pay, and on old versions, that is mainnet. */
+export const hostNetwork = (): Network => (typeof window !== 'undefined' && getHostNetwork() === 'testnet' ? 'testnet' : 'mainnet');
 
 let providerPromise: Promise<NimiqProvider | null> | null = null;
 
@@ -20,7 +23,7 @@ export interface WalletState {
   address: string | null;
   /** Spendable NIM (wallet + current HTLC), or null if unknown. */
   balance: number | null;
-  network: string | undefined;
+  network: Network;
   refresh: () => Promise<void>;
 }
 
@@ -68,7 +71,7 @@ export function useWallet(): WalletState {
     return () => off?.();
   }, [load]);
 
-  return { status, address, balance, network: typeof window !== 'undefined' ? getHostNetwork() : undefined, refresh: load };
+  return { status, address, balance, network: hostNetwork(), refresh: load };
 }
 
 /** Friendly text for anything Nimiq Pay can throw at us. */

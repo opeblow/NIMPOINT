@@ -4,24 +4,34 @@ import { motion } from 'motion/react';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
-import { EXPLORER_ADDRESS, EXPLORER_TX, MEMO_PREFIX } from '@/lib/config';
+import { EXPLORER_ADDRESS, EXPLORER_TX, MEMO_PREFIX, type Network } from '@/lib/config';
 import * as f from '@/lib/format';
 import type { Proof } from '@/lib/types';
-import { Card, Spinner, Wordmark } from '@/components/ui';
+import { Card, Notice, Spinner, Wordmark } from '@/components/ui';
 
 export default function ProofPage() {
   const [proof, setProof] = useState<Proof | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [net, setNet] = useState<Network>('mainnet');
 
   useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('network') === 'testnet') setNet('testnet');
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+    setProof(null);
     const load = () =>
-      api<Proof>('/api/proof')
-        .then((p) => (setProof(p), setErr(null)))
-        .catch((e: Error) => setErr(e.message));
+      api<Proof>(`/api/proof?network=${net}`)
+        .then((p) => alive && (setProof(p), setErr(null)))
+        .catch((e: Error) => alive && setErr(e.message));
     void load();
     const t = setInterval(load, 30_000);
-    return () => clearInterval(t);
-  }, []);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, [net]);
 
   const l = proof?.ledger;
   const maxDay = Math.max(1, ...(l?.daily.map((d) => d.wallets) ?? [1]));
@@ -43,6 +53,19 @@ export default function ProofPage() {
         transactions. Click any one to check it on the explorer.
       </p>
 
+      <div className="mt-5 inline-flex rounded-full bg-paper-2 p-1 text-[13px] font-medium" role="tablist" aria-label="Network">
+        {(['mainnet', 'testnet'] as const).map((n) => (
+          <button key={n} role="tab" aria-selected={net === n} onClick={() => setNet(n)} className={`rounded-full px-4 py-1.5 transition-colors ${net === n ? 'bg-ink text-paper' : 'text-ink-2'}`}>
+            {n === 'mainnet' ? 'Real money (mainnet)' : 'Test network'}
+          </button>
+        ))}
+      </div>
+      {net === 'testnet' && (
+        <div className="mt-3">
+          <Notice tone="warn">These are test-network orders. Test NIM has no value, so nothing here counts as real usage.</Notice>
+        </div>
+      )}
+
       {err && !proof && <p className="mt-8 text-danger">{err}</p>}
       {!proof && !err && (
         <div className="mt-16 flex justify-center text-ink-3">
@@ -52,12 +75,43 @@ export default function ProofPage() {
 
       {proof && l && (
         <>
-          <div className="mt-8 grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <Big label="Unique wallets" value={String(l.uniqueWallets)} accent />
+          <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3">
+            <Big label="Wallets that traded" value={String(l.uniqueWallets)} accent />
+            <Big label="Registered users" value={String(proof.registeredUsers)} />
             <Big label="Settled orders" value={String(l.orders)} />
             <Big label="Naira moved" value={f.ngn(l.volumeNgn)} />
             <Big label="Avg rating" value={l.ratingAvg ? `${l.ratingAvg.toFixed(1)} ★` : '—'} />
+            <Big label="Agent bonds" value={proof.bonds.length ? f.ngn(proof.bonds.reduce((s, b) => s + b.ngn, 0)) : '—'} />
           </div>
+          <p className="mt-2 px-1 text-[12px] leading-snug text-ink-3">
+            A registered user is a wallet that signed a message to prove it exists. A wallet that traded has a payment on the Nimiq blockchain.
+          </p>
+          {proof.otherNetworkOrders > 0 && (
+            <button onClick={() => setNet(net === 'mainnet' ? 'testnet' : 'mainnet')} className="mt-2 px-1 text-[13px] text-ink-2 underline underline-offset-2">
+              {net === 'mainnet' ? `${proof.otherNetworkOrders} more on the test network (not counted here)` : `${proof.otherNetworkOrders} real orders on mainnet`}
+            </button>
+          )}
+
+          {proof.bonds.length > 0 && (
+            <Card className="mt-4 p-5">
+              <p className="text-[17px] font-semibold tracking-[-0.01em]">Agent bonds</p>
+              <p className="mt-1 text-[14px] leading-snug text-ink-2">
+                Each agent locks NIM in a public bond wallet before taking orders. It caps what they can owe customers at once, and a customer who is not paid is refunded from it.
+              </p>
+              <ul className="mt-3 space-y-2 text-[13px]">
+                {proof.bonds.map((b) => (
+                  <li key={b.memo} className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-ink-2">
+                      {b.agent} · <b className="text-ink tabular">{f.nim(b.nim)}</b> ({f.ngn(b.ngn)})
+                    </span>
+                    <a href={EXPLORER_ADDRESS(b.address, net)} target="_blank" rel="noreferrer" className="font-mono text-ink underline underline-offset-2">
+                      {b.memo} ↗
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </Card>
+          )}
 
           {l.daily.length > 0 && (
             <Card className="mt-4 p-5">
@@ -90,7 +144,7 @@ export default function ProofPage() {
               {proof.chain.agents.map((a) => (
                 <li key={a.address} className="flex flex-wrap items-center justify-between gap-2">
                   <span className="text-ink-2">{a.name}</span>
-                  <a href={EXPLORER_ADDRESS(a.address)} target="_blank" rel="noreferrer" className="font-mono text-ink underline underline-offset-2">
+                  <a href={EXPLORER_ADDRESS(a.address, net)} target="_blank" rel="noreferrer" className="font-mono text-ink underline underline-offset-2">
                     {a.address}
                   </a>
                 </li>
@@ -117,7 +171,7 @@ export default function ProofPage() {
                         {f.shortAddress(e.wallet)} · {new Date(e.at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}
                       </p>
                     </div>
-                    <a href={EXPLORER_TX(e.tx)} target="_blank" rel="noreferrer" className="shrink-0 rounded-full bg-paper-2 px-3 py-1 font-mono text-[12px] text-ink">
+                    <a href={EXPLORER_TX(e.tx, net)} target="_blank" rel="noreferrer" className="shrink-0 rounded-full bg-paper-2 px-3 py-1 font-mono text-[12px] text-ink">
                       {e.tx.slice(0, 6)}↗
                     </a>
                   </li>

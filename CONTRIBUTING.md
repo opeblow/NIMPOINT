@@ -23,7 +23,7 @@ AGENT_KEY=test-agent-key-123 AGENT_BANK_NAME=Moniepoint \
 AGENT_BANK_ACCOUNT=9876543210 AGENT_BANK_ACCOUNT_NAME="Yaba Agent" \
 TELEGRAM_WEBHOOK_SECRET=s3cret \
 npm run build && npx next start -p 3100    # terminal 2
-APP=http://localhost:3100 npm run test:e2e # terminal 3: 41 checks
+APP=http://localhost:3100 npm run test:e2e # terminal 3: 60 checks (84 with the optional settings listed at the top of scripts/e2e.mjs)
 ```
 
 ## Before opening a pull request

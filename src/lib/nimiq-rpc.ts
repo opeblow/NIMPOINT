@@ -1,21 +1,31 @@
 import 'server-only';
-import { LUNA_PER_NIM } from './config';
+import { LUNA_PER_NIM, type Network } from './config';
 
 /** Minimal JSON-RPC client for Nimiq Albatross nodes, with failover across NIMIQ_RPC_URL entries. */
-const rpcUrls = () =>
-  (process.env.NIMIQ_RPC_URL ?? 'https://rpc.nimiqwatch.com')
+const rpcUrls = (net: Network) => {
+  // Test network: on by default so test wallets get a working (clearly labelled) app. NIMIQ_TESTNET_RPC_URL=off disables it.
+  const raw = net === 'testnet' ? process.env.NIMIQ_TESTNET_RPC_URL ?? 'https://rpc.testnet.nimiqwatch.com' : process.env.NIMIQ_RPC_URL ?? 'https://rpc.nimiqwatch.com';
+  const urls = raw
     .split(',')
     .map((u) => u.trim())
-    .filter(Boolean);
+    .filter((u) => /^https?:\/\//.test(u));
+  if (net === 'testnet') return urls;
+  // A test-network node set as the main node would make real payments invisible. Refuse it and fall back.
+  const main = urls.filter((u) => !/testnet/i.test(u));
+  if (main.length < urls.length) console.warn('[nimpoint] NIMIQ_RPC_URL points at a test-network node. Ignoring it for mainnet orders.');
+  return main.length ? main : ['https://rpc.nimiqwatch.com'];
+};
+
+export const testnetEnabled = () => rpcUrls('testnet').length > 0;
 
 export class RpcUnavailable extends Error {}
 
-async function rpc<T>(method: string, params: unknown[]): Promise<T> {
+async function rpc<T>(method: string, params: unknown[], net: Network = 'mainnet'): Promise<T> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   const { NIMIQ_RPC_USER: user, NIMIQ_RPC_PASSWORD: pass } = process.env;
   if (user && pass) headers.Authorization = `Basic ${Buffer.from(`${user}:${pass}`).toString('base64')}`;
 
-  const urls = rpcUrls();
+  const urls = rpcUrls(net);
   for (const url of [...urls, ...urls]) {
     const res = await fetch(url, {
       method: 'POST',
@@ -81,8 +91,8 @@ const toChainTx = (t: RawTx): ChainTx => ({
 /** A payment counts only once it is in a block (pending transactions can still vanish). */
 const confirmed = (t: RawTx) => t.confirmations === undefined || t.confirmations >= 1;
 
-export async function getTransaction(hash: string): Promise<ChainTx | null> {
-  const t = await rpc<RawTx | null>('getTransactionByHash', [hash]).catch((e) => {
+export async function getTransaction(hash: string, net: Network = 'mainnet'): Promise<ChainTx | null> {
+  const t = await rpc<RawTx | null>('getTransactionByHash', [hash], net).catch((e) => {
     if (e instanceof RpcUnavailable) throw e;
     return null;
   });
@@ -90,8 +100,8 @@ export async function getTransaction(hash: string): Promise<ChainTx | null> {
 }
 
 /** Latest successful transactions touching an address, newest first. */
-export async function recentTransactions(address: string, max = 100): Promise<ChainTx[]> {
-  const txs = await rpc<RawTx[]>('getTransactionsByAddress', [friendlyAddress(address), max, null]);
+export async function recentTransactions(address: string, max = 100, net: Network = 'mainnet'): Promise<ChainTx[]> {
+  const txs = await rpc<RawTx[]>('getTransactionsByAddress', [friendlyAddress(address), max, null], net);
   return (txs ?? []).filter((t) => t.executionResult !== false && confirmed(t)).map(toChainTx);
 }
 
@@ -105,10 +115,16 @@ interface RawAccount {
  * Nimiq Pay pays from an HTLC funded by the user's wallet. Resolve it back to
  * the wallet so we can tie a payment to a person.
  */
-export async function ownerOf(address: string): Promise<string> {
-  const acc = await rpc<RawAccount | null>('getAccountByAddress', [friendlyAddress(address)]).catch(() => null);
+export async function ownerOf(address: string, net: Network = 'mainnet'): Promise<string> {
+  const acc = await rpc<RawAccount | null>('getAccountByAddress', [friendlyAddress(address)], net).catch(() => null);
   if (acc?.type === 'htlc' && acc.sender) return friendlyAddress(acc.sender);
   return friendlyAddress(address);
+}
+
+/** NIM held at an address right now. */
+export async function getBalance(address: string, net: Network = 'mainnet'): Promise<number> {
+  const acc = await rpc<RawAccount | null>('getAccountByAddress', [friendlyAddress(address)], net);
+  return Number(acc?.balance ?? 0) / LUNA_PER_NIM;
 }
 
 export const getBlockNumber = () => rpc<number>('getBlockNumber', []);

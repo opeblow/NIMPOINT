@@ -7,12 +7,15 @@ import { api, ApiError } from '@/lib/api';
 import * as f from '@/lib/format';
 import { agentKey, rememberAgentKey } from '@/lib/local';
 import { definitelyNotSent, payWithMemo, walletErrorMessage } from '@/lib/nimiq-client';
-import type { Order, PublicAgent } from '@/lib/types';
+import type { Bond, Order, PublicAgent } from '@/lib/types';
 import { StatusPill } from '@/components/StatusPill';
 import { Button, Card, CopyField, cx, Notice, Sheet, Spinner, Stars, Wordmark } from '@/components/ui';
 
 interface Dash {
   agent: PublicAgent;
+  /** Which network the header numbers are for. */
+  statsNetwork?: 'mainnet' | 'testnet';
+  bond?: Bond | null;
   orders: Order[];
 }
 
@@ -29,6 +32,7 @@ export default function AgentConsole() {
   const [err, setErr] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   const [qrOpen, setQrOpen] = useState(false);
+  const [bondOpen, setBondOpen] = useState(false);
 
   const load = useCallback(async (k: string) => {
     try {
@@ -112,7 +116,10 @@ export default function AgentConsole() {
       <section className="mt-4 rounded-[28px] bg-ink p-5 text-paper">
         <div className="flex items-start justify-between gap-3">
           <div>
-            <p className="text-[13px] text-paper/60">{agent.area}</p>
+            <p className="text-[13px] text-paper/60">
+              {agent.area}
+              {dash.statsNetwork === 'testnet' ? ' · test network numbers' : ''}
+            </p>
             <p className="text-[22px] font-semibold tracking-[-0.02em]">{agent.name}</p>
           </div>
           <OnlineSwitch
@@ -146,6 +153,28 @@ export default function AgentConsole() {
         <div className="mt-4">
           <Notice tone="warn">{err}</Notice>
         </div>
+      )}
+
+      {dash.bond && (
+        <Card className="mt-4 p-5">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-[13px] text-ink-3">Your bond{dash.bond.network === 'testnet' ? ' (test network)' : ''}</p>
+              <p className="text-[24px] font-semibold tracking-[-0.03em] tabular">{f.nim(dash.bond.nim)}</p>
+              <p className="text-[13px] text-ink-2 tabular">
+                Worth {f.ngn(dash.bond.ngn)} · {f.ngn(dash.bond.exposureNgn)} in use · <b className="text-ink">{f.ngn(dash.bond.availableNgn)} free</b>
+              </p>
+            </div>
+            <Button size="sm" variant={dash.bond.nim > 0 ? 'ghost' : 'gold'} onClick={() => setBondOpen(true)}>
+              Add
+            </Button>
+          </div>
+          <p className="mt-3 text-[13px] leading-snug text-ink-3">
+            {dash.bond.nim > 0
+              ? 'Your bond is the most you can owe customers at one time. Each cash-out uses part of it until the customer confirms.'
+              : 'You need a bond before you can take orders. It protects your customers and stays yours.'}
+          </p>
+        </Card>
       )}
 
       <Section title={`Needs you${todo.length ? ` · ${todo.length}` : ''}`}>
@@ -188,6 +217,11 @@ export default function AgentConsole() {
       <Sheet open={qrOpen} onClose={() => setQrOpen(false)} title="Your NimPoint QR">
         <AgentQr agentId={agent.id} name={agent.name} />
       </Sheet>
+      {dash.bond && (
+        <Sheet open={bondOpen} onClose={() => setBondOpen(false)} title="Add to your bond">
+          <BondForm bond={dash.bond} onDone={() => (setBondOpen(false), void load(key))} />
+        </Sheet>
+      )}
     </Shell>
   );
 }
@@ -226,6 +260,7 @@ function Line({ order: o }: { order: Order }) {
         </p>
         <p className="flex items-center gap-2 text-[12px] text-ink-3">
           <span className="font-mono">{o.id}</span> · {f.ago(o.createdAt)}
+          {o.network === 'testnet' ? <TestTag /> : null}
           {o.rating ? <Stars value={o.rating} size="sm" /> : null}
         </p>
         {o.extraPayments?.length ? (
@@ -296,9 +331,17 @@ function TodoCard({ order: o, agentKey: key, onChange }: { order: Order; agentKe
   return (
     <Card className={cx('overflow-hidden', o.status === 'disputed' && 'border-danger/40')}>
       <div className="flex items-center justify-between px-5 pt-4">
-        <span className="font-mono text-[13px] text-ink-3">#{o.id}</span>
+        <span className="flex items-center gap-2 font-mono text-[13px] text-ink-3">
+          #{o.id}
+          {o.network === 'testnet' ? <TestTag /> : null}
+        </span>
         <StatusPill order={o} />
       </div>
+      {o.network === 'testnet' && (
+        <p className="mx-5 mt-2 rounded-2xl bg-danger-soft p-3 text-[13px] font-medium leading-snug text-danger">
+          Test order. This NIM is on the Nimiq test network and has no real value. Do not send real Naira for it.
+        </p>
+      )}
       {o.kind === 'cashout' ? (
         <div className="px-5 pb-5">
           <p className="mt-1 text-[26px] font-semibold tracking-[-0.03em] tabular">Pay {f.ngn(payout)}</p>
@@ -360,6 +403,62 @@ function TodoCard({ order: o, agentKey: key, onChange }: { order: Order; agentKe
         </div>
       )}
     </Card>
+  );
+}
+
+const TestTag = () => <span className="rounded-full bg-danger-soft px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-danger">Test</span>;
+
+/** Add to the bond from Nimiq Pay in one tap, or copy the details to send from any Nimiq wallet. */
+function BondForm({ bond, onDone }: { bond: Bond; onDone: () => void }) {
+  const [amount, setAmount] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [sent, setSent] = useState(false);
+  const nim = Number(amount || 0);
+  return (
+    <div className="space-y-3">
+      <p className="text-[15px] leading-snug text-ink-2">
+        Send NIM to the NimPoint bond wallet with the memo below. It shows here about a minute after it confirms. The memo is how the chain knows the deposit is yours, so copy it exactly.
+      </p>
+      <div className="divide-y divide-line/70 rounded-2xl bg-paper-2/60 px-4">
+        <CopyField label="Bond wallet" value={bond.address} />
+        <CopyField label="Memo (required)" value={bond.memo} />
+      </div>
+      <input
+        inputMode="decimal"
+        value={amount}
+        onChange={(e) => setAmount(e.target.value.replace(/[^0-9.]/g, '').slice(0, 12))}
+        placeholder="Amount in NIM"
+        className="h-12 w-full rounded-xl border border-line bg-card px-3 text-[16px] outline-none focus:border-ink"
+      />
+      {err && <p className="text-[13px] text-danger">{err}</p>}
+      {sent ? (
+        <Notice tone="info">Sent. Your bond updates here once the chain confirms it.</Notice>
+      ) : (
+        <Button
+          variant="gold"
+          className="w-full"
+          loading={busy}
+          disabled={!(nim > 0)}
+          onClick={async () => {
+            setBusy(true);
+            setErr(null);
+            try {
+              await payWithMemo(bond.address, nim, bond.memo);
+              setSent(true);
+              setTimeout(onDone, 2500);
+            } catch (e) {
+              setErr(walletErrorMessage(e));
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          Send {nim > 0 ? f.nim(nim) : 'NIM'} with Nimiq Pay
+        </Button>
+      )}
+      <p className="text-[13px] leading-snug text-ink-3">To take your bond back, finish your open orders and ask NimPoint. It is returned from the bond wallet on-chain.</p>
+    </div>
   );
 }
 

@@ -1,5 +1,6 @@
 import 'server-only';
 import { createHash, createPublicKey, verify } from 'node:crypto';
+import { blake2b } from '@noble/hashes/blake2b';
 
 const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
 const PREFIX = '\x16Nimiq Signed Message:\n';
@@ -23,4 +24,20 @@ export function verifyNimiqMessage(message: string, publicKeyHex: string, signat
   } catch {
     return false;
   }
+}
+
+const BASE32 = '0123456789ABCDEFGHJKLMNPQRSTUVXY';
+
+/** The Nimiq address (no spaces) that belongs to an ed25519 public key. Returns null for a malformed key. */
+export function addressFromPublicKey(publicKeyHex: string): string | null {
+  if (!/^[0-9a-f]{64}$/i.test(publicKeyHex)) return null;
+  const hash = blake2b(Buffer.from(publicKeyHex, 'hex'), { dkLen: 32 }).subarray(0, 20);
+  let bits = '';
+  for (const b of hash) bits += b.toString(2).padStart(8, '0');
+  let body = '';
+  for (let i = 0; i < 160; i += 5) body += BASE32[parseInt(bits.slice(i, i + 5), 2)];
+  // IBAN-style check digits over body + "NQ00", letters counted as 10..35.
+  let mod = 0;
+  for (const c of body + 'NQ00') for (const d of c >= 'A' ? String(c.charCodeAt(0) - 55) : c) mod = (mod * 10 + Number(d)) % 97;
+  return `NQ${String(98 - mod).padStart(2, '0')}${body}`;
 }

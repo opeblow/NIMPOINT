@@ -43,12 +43,13 @@ export async function alertAgent(
     const pay = order.payoutNgn ?? order.ngn;
     lines.push(`💸 <b>Pay out ${ngn(pay)}</b> · order <code>${order.id}</code>`);
     lines.push(`Received ${nim(order.tx?.nim ?? order.nim)} on-chain ✅`);
+    if (order.network === 'testnet') lines.push('⚠️ <b>TEST ORDER</b>: this is test-network NIM with no value. Do not send real Naira.');
     if (order.mode === 'bank' && order.bank) {
       lines.push('', `<b>${esc(order.bank.accountName)}</b>`, `${esc(order.bank.bankName)} · <code>${order.bank.accountNumber}</code>`);
     } else {
       lines.push('', '🧍 Customer is collecting <b>cash in hand</b>. Check the code on their phone.');
     }
-    if (order.tx) lines.push('', `<a href="${EXPLORER_TX(order.tx.hash)}">View transaction</a>`);
+    if (order.tx) lines.push('', `<a href="${EXPLORER_TX(order.tx.hash, order.network)}">View transaction</a>`);
     keyboard = [[{ text: `✅ I've paid ${ngn(pay)}`, callback_data: `sent:${order.id}` }], ...keyboard];
   } else if (event === 'fiat_sent') {
     lines.push(`🪙 <b>Top-up ${ngn(order.ngn)}</b> · order <code>${order.id}</code>`);
@@ -62,7 +63,7 @@ export async function alertAgent(
       lines.push(`<b>You sent NIM twice</b> for order <code>${order.id}</code> (extra ${nim(extra.nim)}).`);
       lines.push('Ask the customer to send it back.');
     }
-    lines.push('', `<a href="${EXPLORER_TX(extra.hash)}">View transaction</a>`);
+    lines.push('', `<a href="${EXPLORER_TX(extra.hash, order.network)}">View transaction</a>`);
   } else if (event === 'created_cash') {
     lines.push(`👋 Walk-up cash-out started: ${ngn(order.ngn)} · <code>${order.id}</code>`);
   } else {

@@ -182,6 +182,7 @@ export function OrderScreen({ id }: { id: string }) {
       </motion.section>
 
       <div className="mt-5 space-y-4">
+        {order.network === 'testnet' && <Notice tone="warn">Test order. This NIM is on the Nimiq test network and has no real value, so no real Naira is owed.</Notice>}
         {actionError && <Notice tone="error">{actionError}</Notice>}
         {order.extraPayments?.length ? (
           <Notice tone="warn">
@@ -287,9 +288,17 @@ export function OrderScreen({ id }: { id: string }) {
                     : `Check your ${order.bank?.bankName ?? 'bank'} app for ${f.ngn(payout)} from ${agentName}.`
                 : `${f.nim(order.tx?.nim ?? order.nim)} has landed in your Nimiq Pay wallet.`}
             </p>
+            {order.kind === 'cashout' && view?.agent?.bond && view.agent.bond.nim > 0 && (
+              <p className="mt-2 text-[13px] leading-snug text-naira">
+                Protected by {agentName}&apos;s bond of {f.ngn(view.agent.bond.ngn)}. If the money never comes, report it and NimPoint refunds you from the bond.
+              </p>
+            )}
             <Button className="mt-4 w-full" loading={busy === 'confirm'} onClick={confirm}>
               {order.kind === 'cashout' ? "I've received my Naira" : 'Confirm received'}
             </Button>
+            {order.kind === 'cashout' && order.status === 'payout_sent' && (
+              <p className="mt-2 text-center text-[12px] leading-snug text-ink-3">Only confirm once the money is in your account. With no confirmation and no report for 24 hours, the order closes by itself.</p>
+            )}
             {order.status !== 'disputed' && order.kind === 'cashout' && (
               <Button variant="quiet" size="sm" className="mt-2 w-full" onClick={() => setDisputeOpen(true)}>
                 Not received?
@@ -359,7 +368,18 @@ function Headline({ order, agentName, waitingChain }: { order: Order; agentName:
           : [`${payout} on the way`, `Payment verified on-chain. ${agentName} is sending it now.`]
         : [`${f.nim(order.tx?.nim ?? order.nim)} arrived`, 'Verified on the Nimiq blockchain.'],
     payout_sent: [`${payout} sent`, `${agentName} marked it as paid${order.payoutRef ? ` · ref ${order.payoutRef}` : ''}.`],
-    completed: ['All done', order.kind === 'cashout' ? `${payout} received. Thanks for using NimPoint.` : `${f.nim(order.tx?.nim ?? order.nim)} received.`],
+    completed: [
+      'All done',
+      order.resolution === 'refunded'
+        ? `NimPoint refunded you from ${agentName}'s bond.`
+        : order.resolution === 'agent_paid'
+          ? `NimPoint checked this order: ${agentName} paid ${payout}.`
+          : order.autoCompleted
+            ? 'Closed automatically: no problem was reported in time.'
+            : order.kind === 'cashout'
+              ? `${payout} received. Thanks for using NimPoint.`
+              : `${f.nim(order.tx?.nim ?? order.nim)} received.`,
+    ],
     disputed: ['We’re on it', `${agentName} has been alerted and will reach out. Your payment is recorded on-chain.`],
     awaiting_fiat: cash ? [`Hand over ${f.ngn(order.ngn)}`, `at ${agentName}`] : [`Send ${f.ngn(order.ngn)}`, `to ${agentName}'s account below`],
     fiat_sent: ['Waiting for the agent', `${agentName} is checking your payment, then sends ${f.nim(order.nim)}.`],
@@ -444,7 +464,7 @@ function Receipt({ order, agentName }: { order: Order; agentName: string }) {
   if (order.tx)
     rows.push([
       'Transaction',
-      <a key="t" href={EXPLORER_TX(order.tx.hash)} target="_blank" rel="noreferrer" className="font-mono text-ink underline underline-offset-2">
+      <a key="t" href={EXPLORER_TX(order.tx.hash, order.network)} target="_blank" rel="noreferrer" className="font-mono text-ink underline underline-offset-2">
         {order.tx.hash.slice(0, 8)}…{order.tx.hash.slice(-6)}
       </a>,
     ]);
