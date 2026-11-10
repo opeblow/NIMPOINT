@@ -219,7 +219,7 @@ export function OrderScreen({ id }: { id: string }) {
             <p className="text-[15px] leading-snug text-ink-2">
               No payment arrived within 30 minutes, so this quote expired. If you did pay, don&apos;t worry: we keep watching the chain for 24 hours and this order will update by itself.
             </p>
-            <Link href="/" className="mt-4 flex h-12 items-center justify-center rounded-full bg-ink text-[15px] font-medium text-paper">
+            <Link href="/app" className="mt-4 flex h-12 items-center justify-center rounded-full bg-ink text-[15px] font-medium text-paper">
               Start a new order
             </Link>
           </Card>
@@ -300,7 +300,7 @@ export function OrderScreen({ id }: { id: string }) {
 
         <Receipt order={order} agentName={agentName} />
 
-        <Link href="/" className="flex h-12 items-center justify-center text-[15px] font-medium text-ink-2">
+        <Link href="/app" className="flex h-12 items-center justify-center text-[15px] font-medium text-ink-2">
           Back to NimPoint
         </Link>
       </div>
