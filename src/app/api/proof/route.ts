@@ -13,6 +13,12 @@ export const dynamic = 'force-dynamic';
 /** Exactly the memo format NimPoint creates: prefix + 8-char order code. */
 const MEMO_RE = new RegExp(`^${MEMO_PREFIX}-[2-9A-HJKMNP-Z]{8}$`);
 
+/** The team's own wallets, so their test orders are labelled instead of passed off as users. */
+function teamWallets(): string[] {
+  return (process.env.TEAM_WALLETS ?? '').split(',').map((w) => w.trim()).filter(Boolean);
+}
+const isTeam = (wallet: string) => teamWallets().some((t) => sameAddress(t, wallet));
+
 const settled = new Set(['paid', 'payout_sent', 'completed', 'disputed']);
 
 async function chainCount(net: Network) {
@@ -63,9 +69,11 @@ export async function GET(req: Request) {
       registeredUsers: await registeredCount(net),
       otherNetworkOrders: everything.length - orders.length,
       bonds: await bonds(net),
+      bondNetwork: bondConfig()?.network ?? null,
       ledger: {
         uniqueWallets: wallets.size,
         orders: orders.length,
+        teamOrders: orders.filter((o) => isTeam(o.wallet)).length,
         completed: orders.filter((o) => o.status === 'completed').length,
         volumeNgn: orders.reduce((s, o) => s + (o.payoutNgn ?? o.ngn), 0),
         volumeNim: orders.reduce((s, o) => s + (o.tx?.nim ?? 0), 0),
@@ -82,6 +90,7 @@ export async function GET(req: Request) {
           at: o.tx!.at,
           tx: o.tx!.hash,
           rating: o.rating,
+          team: isTeam(o.wallet),
         })),
       },
       chain: await chainCount(net).catch(() => ({ memoPayments: 0, uniqueSenders: 0, agents: [] })),

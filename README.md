@@ -265,6 +265,7 @@ Nimiq has no general smart contracts, so the bond is deliberately simple and ful
 4. Every cash-out that is paid on-chain but not yet finished counts against the bond. A new cash-out is accepted only if it fits in what is left.
 5. If a customer is not paid, the operator refunds them from the bond wallet (with the `BONDOUT` memo, so the agent's bond drops on-chain) and closes the report with that transaction's hash. NimPoint checks the refund on-chain before closing: it must come from the bond wallet, carry the agent's `BONDOUT` memo, go to the wallet that really paid, and cover the NIM the customer sent. One refund can close one order only.
 6. All agents share one bond wallet. If their deposits ever add up to more than it really holds, every bond is scaled down by the same factor, so the bonds together never promise more NIM than is there.
+7. The bond wallet lives on one network, set by `BOND_NETWORK` (`mainnet` by default). Bonds only gate orders on that network. With `BOND_NETWORK=testnet`, the whole bond flow (deposit, limit, refund) runs with free test NIM while mainnet orders stay open; `/proof` says so on the mainnet tab. Moving to mainnet is a change of two variables once a mainnet bond is funded.
 
 What this does and does not cover, honestly:
 
@@ -407,7 +408,8 @@ In a normal browser the app runs in **preview mode** and shows an "Open in Nimiq
    - Set `TELEGRAM_WEBHOOK_SECRET` and `ADMIN_KEY` to random strings, redeploy.
    - Open `https://YOUR-APP/api/telegram/setup?key=ADMIN_KEY` once.
    - Message your bot `/start`. It replies with your chat ID → `AGENT_TELEGRAM_CHAT_ID`, redeploy.
-6. **Agent bonds (recommended):** create a wallet at [wallet.nimiq.com](https://wallet.nimiq.com), set `BOND_ADDRESS` to its address and redeploy. Each agent then opens `/agent` and taps **Add** on the bond card. Set `ADMIN_KEY` too, so you can close reported orders.
+6. **Agent bonds (recommended):** create a wallet at [wallet.nimiq.com](https://wallet.nimiq.com), set `BOND_ADDRESS` to its address and redeploy. Each agent then opens `/agent` and taps **Add** on the bond card. Set `ADMIN_KEY` too, so you can close reported orders. To try bonds with test NIM first, use a test-network wallet and add `BOND_NETWORK=testnet`.
+   - **Team test orders:** list your own wallets in `TEAM_WALLETS` (comma-separated). Their orders stay on `/proof`, since they are real transactions, but are marked "team" so they are never mistaken for customers.
 7. **Open the URL in Nimiq Pay** and do a small test cash-out to yourself. Use a wallet other than the agent's.
 8. **Leave `NIMIQ_RPC_URL` unset** unless you run your own mainnet node. Test-network wallets are handled separately and automatically.
 9. **Print your QR:** open `/agent`, enter your key, tap "Show my NimPoint QR".

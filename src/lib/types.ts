@@ -147,6 +147,8 @@ export interface ProofEntry {
   at: number;
   tx: string;
   rating?: number;
+  /** Paid by a wallet the team listed in TEAM_WALLETS: a real order, but our own test. */
+  team?: boolean;
 }
 
 export interface Proof {
@@ -157,9 +159,13 @@ export interface Proof {
   /** Settled orders on the other network, so the page can point to them. */
   otherNetworkOrders: number;
   bonds: { agent: string; address: string; memo: string; nim: number; ngn: number }[];
+  /** Network the bond wallet runs on, or null when bonds are off. Bonds only gate orders on that network. */
+  bondNetwork: Network | null;
   ledger: {
     uniqueWallets: number;
     orders: number;
+    /** Orders paid by the team's own wallets (TEAM_WALLETS). Included in `orders`, labelled on the page. */
+    teamOrders: number;
     completed: number;
     volumeNgn: number;
     volumeNim: number;

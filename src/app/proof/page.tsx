@@ -81,11 +81,27 @@ export default function ProofPage() {
             <Big label="Settled orders" value={String(l.orders)} />
             <Big label="Naira moved" value={f.ngn(l.volumeNgn)} />
             <Big label="Avg rating" value={l.ratingAvg ? `${l.ratingAvg.toFixed(1)} ★` : '—'} />
-            <Big label="Agent bonds" value={proof.bonds.length ? f.ngn(proof.bonds.reduce((s, b) => s + b.ngn, 0)) : '—'} />
+            <Big
+              label="Agent bonds"
+              value={proof.bonds.length ? f.ngn(proof.bonds.reduce((s, b) => s + b.ngn, 0)) : proof.bondNetwork && proof.bondNetwork !== net ? 'Testnet' : 'Off'}
+            />
           </div>
           <p className="mt-2 px-1 text-[12px] leading-snug text-ink-3">
             A registered user is a wallet that signed a message to prove it exists. A wallet that traded has a payment on the Nimiq blockchain.
           </p>
+          {l.teamOrders > 0 && (
+            <p className="mt-1 px-1 text-[12px] leading-snug text-ink-3">
+              {l.teamOrders} of these {l.orders} orders were paid by the NimPoint team&apos;s own wallets to test the live flow. They are real transactions, marked “team” below.
+            </p>
+          )}
+          {proof.bondNetwork && proof.bondNetwork !== net && (
+            <div className="mt-3">
+              <Notice tone="warn">
+                Agent bonds currently run on the {proof.bondNetwork === 'testnet' ? 'test network' : 'mainnet'}, so they do not gate these orders yet. They switch over once a funded bond
+                wallet is set for this network.
+              </Notice>
+            </div>
+          )}
           {proof.otherNetworkOrders > 0 && (
             <button onClick={() => setNet(net === 'mainnet' ? 'testnet' : 'mainnet')} className="mt-2 px-1 text-[13px] text-ink-2 underline underline-offset-2">
               {net === 'mainnet' ? `${proof.otherNetworkOrders} more on the test network (not counted here)` : `${proof.otherNetworkOrders} real orders on mainnet`}
@@ -166,6 +182,7 @@ export default function ProofPage() {
                     <div className="min-w-0">
                       <p className="font-medium">
                         {e.kind === 'cashout' ? 'Cash out' : 'Top up'} · {f.ngn(e.ngn)} <span className="text-ink-3">· {f.nim(e.nim)}</span>
+                        {e.team && <span className="ml-2 rounded-full bg-paper-2 px-2 py-0.5 text-[11px] font-medium text-ink-2">team</span>}
                       </p>
                       <p className="truncate font-mono text-[12px] text-ink-3">
                         {f.shortAddress(e.wallet)} · {new Date(e.at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}
