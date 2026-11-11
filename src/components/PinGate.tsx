@@ -150,6 +150,12 @@ export function PinGate({ children }: { children: ReactNode }) {
       <LogoMark className="h-14 w-14" />
       <h1 className="mt-6 text-[26px] font-semibold tracking-[-0.03em]">{title}</h1>
       <p className="mt-1 text-center text-[15px] text-ink-2">{sub}</p>
+      {mode === 'create' && (
+        <p className="mt-3 max-w-[20rem] text-center text-[13px] leading-snug text-ink-3">
+          NimPoint turns NIM into Naira, and Naira into NIM, through local agents. This passcode only locks the app on
+          this phone. It is not a wallet password: your NIM stay in Nimiq Pay.
+        </p>
+      )}
 
       <motion.div animate={shake} className="mt-8 flex gap-4" aria-label={`${pin.length} of ${LEN} digits entered`}>
         {Array.from({ length: LEN }, (_, i) => (

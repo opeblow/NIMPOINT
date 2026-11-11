@@ -39,6 +39,7 @@ const K = {
   idem: (w: string, key: string) => `idem:${normalizeAddress(w)}:${key}`,
   alert: (what: string) => `alert:${what}`,
   online: (a: string) => `agent:online:${a}`,
+  seen: (a: string) => `agent:seen:${a}`,
   stats: (a: string, net: Network = 'mainnet') => (net === 'mainnet' ? `agent:stats:${a}` : `agent:stats:${net}:${a}`),
 };
 
@@ -55,6 +56,9 @@ const EXTRA_THROTTLE_MS = 60_000;
 const AUTO_COMPLETE_MS = Number(process.env.AUTO_COMPLETE_MS) || 24 * 3600 * 1000;
 /** How long an agent's started NIM send blocks another send. */
 export const SEND_LOCK_MS = 10 * 60_000;
+
+/** A rate older than this is fine to show but never locked into an order. */
+const ORDER_RATE_MAX_AGE_MS = 10 * 60_000;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -114,12 +118,25 @@ async function notifyPayments(order: Order) {
 
 /* ───────────────────────────── agents ───────────────────────────── */
 
+/** An agent who hasn't opened the console (or toggled online) for this long is shown offline. */
+const AGENT_IDLE_MS = (Number(process.env.AGENT_IDLE_HOURS) || 12) * 3600_000;
+
+/**
+ * Online means: not switched off, and seen recently. Agents who have never opened the console since this
+ * check existed stay online until they do, so an existing deployment doesn't go dark on upgrade.
+ */
 export async function isOnline(agentId: string) {
-  return (await store.get<string>(K.online(agentId))) !== '0';
+  const [flag, seen] = await Promise.all([store.get<string>(K.online(agentId)), store.get<number>(K.seen(agentId))]);
+  // String(): Redis hands back '0' as the number 0.
+  if (String(flag) === '0') return false;
+  return !seen || Date.now() - Number(seen) < AGENT_IDLE_MS;
 }
 
+/** The agent is here: their console is open, or they just used it. */
+export const touchAgent = (agentId: string) => store.set(K.seen(agentId), Date.now(), 30 * 24 * 3600);
+
 export async function setOnline(agentId: string, online: boolean) {
-  await store.set(K.online(agentId), online ? '1' : '0');
+  await Promise.all([store.set(K.online(agentId), online ? '1' : '0'), touchAgent(agentId)]);
 }
 
 const agentOrders = async (agentId: string, net: Network) =>
@@ -273,6 +290,10 @@ export async function createOrder(input: {
       throw new OrderError('Hang on, your order is being created.', 429);
     }
     const quote = await getQuote();
+    // The last good rate keeps screens working when CoinGecko is down, but a price is only locked on a fresh rate.
+    if (Date.now() - quote.updatedAt > ORDER_RATE_MAX_AGE_MS) {
+      throw new OrderError("We can't get a fresh NIM price right now, so we won't lock one. Please try again in a few minutes.", 503);
+    }
     const spread = input.kind === 'cashout' ? agent.cashoutSpreadBps : agent.topupSpreadBps;
     const rate = agentRate(quote.mid, input.kind, spread);
     const now = Date.now();

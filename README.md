@@ -240,9 +240,9 @@ Real money moves through this app, so every edge case has a rule:
 | User sends less than quoted | Payout recalculated from the NIM received at the locked rate, and explained on screen and to the agent. |
 | Payment arrives after the 30-minute quote | Still honoured: we keep watching for 24 hours. |
 | Double tap on "Send" | One order per wallet per 3 seconds; the button shows a spinner. |
-| Agent goes offline | Hidden from new orders instantly. |
+| Agent goes offline | Hidden from new orders instantly. An agent whose console hasn't been open for 12 hours (`AGENT_IDLE_HOURS`) is shown offline too, so nobody pays an agent who isn't there. |
 | Payout is late | "Not received?" reports it, alerts the agent on Telegram and keeps the on-chain record. |
-| Rate API down | Last good rate is served (up to 6h) so the app never goes blank. |
+| Rate API down | Last good rate is shown (up to 6h) so the app never goes blank, but a new order only locks a rate less than 10 minutes old. |
 | Nimiq node down | Multiple RPC URLs with failover and retry; a clear "your order is safe" message. |
 | Database missing in production | Orders are refused with a clear message rather than silently lost. |
 | Agent console | Secret key per agent, header-only, never in the browser bundle. |
@@ -288,7 +288,7 @@ NimPoint is honest about what it cannot do yet. A reader deciding whether to tru
 | **Agents are few and hand-picked.** There is no self-service sign-up. | Letting anyone become an agent before bonds are funded would put customers at risk. | Planned once bonds are in regular use. |
 | **Small orders only.** ₦20,000 per order at most. | Keeps the loss small if something goes wrong while the network of agents is young. | Each agent can also set a lower limit. |
 | **Rates move.** The rate is locked for 30 minutes, and the agent carries the price risk in that time. | NIM is volatile. | The agent's spread (1.5% by default) pays for it. |
-| **Regulation.** Peer-to-peer crypto trading sits in a changing legal area in Nigeria. | Outside the app's control. | NimPoint never holds customer funds and does not present itself as a bank or exchange. Operators are responsible for following local rules. |
+| **Regulation.** The Central Bank of Nigeria's *Regulations for the Operations of Non-Security Virtual Assets in Nigeria* took effect on 5 November 2026. They bring platform-facilitated P2P naira conversions under a licence and approval regime, with a 180-day window for existing providers, and expect platforms to reconcile the crypto leg of each trade with its naira leg. | Outside the app's control. Being non-custodial does not by itself exempt a P2P platform. | NimPoint is a competition prototype with small capped orders. Before any commercial launch the operator must obtain the approvals that apply. NimPoint links every NIM payment to its order and the agent's payout reference, but it cannot verify the naira leg itself (see the first row). |
 | **Real usage is still early.** | The app is new. | The proof page shows real-money and test-network activity on separate tabs, so nothing is overstated. |
 
 ## Architecture
@@ -459,7 +459,7 @@ Inspired by the clarity of top consumer fintech, built for Lagos:
 - **Logo:** an original mark, a gold location pin (a cash point near you) with the Naira double bar inside.
 - **3D:** a gold NimPoint coin in React Three Fiber, lit with studio light-formers generated in code (no HDR download inside the webview). Falls back to an SVG coin if WebGL is unavailable.
 - **Motion:** rolling digits, spring segmented controls, draggable bottom sheets, animated timeline. Enter-only page transitions so a throttled webview never shows a blank screen. `prefers-reduced-motion` respected.
-- **Passcode:** a 4-digit device passcode (SHA-256 hashed, stored only on the phone) protects the app on shared phones. Five wrong tries trigger a 30-second lock. "Forgot passcode" resets it; funds are never at risk because they stay in Nimiq Pay.
+- **Passcode:** a 4-digit device passcode (SHA-256 hashed, stored only on the phone) keeps NimPoint private on a shared phone. It is a screen lock, not an authentication factor: "Forgot passcode" resets it on the device, which is fine because funds stay in Nimiq Pay and every payment is approved there. Five wrong tries trigger a 30-second lock. The first screen says this in one line.
 - **Accessibility:** 16px+ inputs (no iOS zoom), 44px+ touch targets, ARIA labels on keypad, tabs, switches and ratings.
 
 ## Cross-platform support
