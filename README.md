@@ -276,6 +276,20 @@ What this does and does not cover, honestly:
 
 Customer NIM still goes wallet-to-wallet and is never held by NimPoint. Agent bonds are the only funds NimPoint holds.
 
+### Tested live (11 November 2026)
+
+Bonds are switched on in production at [nimpoint.vercel.app](https://nimpoint.vercel.app), running on the Nimiq **test network** (`BOND_NETWORK=testnet`). This is what was tested and worked, and anyone can check it on-chain:
+
+| What was tested | Result |
+| --- | --- |
+| Bond wallet set in production | `NQ59 A4S3 SGJ8 SVM9 7QYD 35RL B1QB Q0BC YJKK` (test network) |
+| Agent posts a bond in one tap from `/agent` inside Nimiq Pay | 20,000 test NIM deposited with the memo `NIMPOINT-BOND-YABA-1`. Transaction `1563cd9f43e37466db29be7a777b46e6ba132fe302ecfdb9bbde0509e32b8f0c` |
+| Bond is read from the chain, not the database | `/proof` (test network tab) and `/api/agents` showed NimPoint Yaba with a 20,000 NIM bond about a minute after the deposit confirmed, all of it free |
+| Mainnet orders stay open while bonds run on testnet | The mainnet tab of `/proof` shows "Testnet" for bonds with a notice, and mainnet orders are not blocked |
+| Team test orders are labelled | The ₦500 test-network cash-out paid from our own wallet (order `TAPT9HF8`, transaction `1f1b43e39451c4c77deda828b9c3d1b0ebe39dfbb0f04f913a1ba5a5ca46fd2b`) is marked "team" on `/proof` and counted separately |
+
+What has **not** been tested yet, honestly: a bond on mainnet with real NIM, and a refund paid out of the bond wallet. The bond and the orders above use free test NIM, and the mainnet tab of `/proof` shows the real numbers, whatever they are.
+
 ## Limits and open risks
 
 NimPoint is honest about what it cannot do yet. A reader deciding whether to trust it should know these.
