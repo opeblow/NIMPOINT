@@ -231,17 +231,18 @@ Real money moves through this app, so every edge case has a rule:
 
 | Situation | What NimPoint does |
 | --- | --- |
-| User closes the app right after paying | Payment is found by scanning the recipient's history for the memo. No hash needed. |
+| User closes the app right after paying | Payment is found by scanning the recipient's history for the memo, page by page back to when the order was made, so a busy agent wallet never hides it. No hash needed. |
 | Nimiq Pay returns a serialized tx, not a hash | Same memo scan. Verified in tests. |
 | Wallet says "outcome unknown" | Treated as sent: the Pay button is hidden for 3 minutes while we watch the chain, so the user is never invited to pay twice. |
 | Someone reuses an old transaction hash | A hash can settle exactly one order (atomic lock). |
 | Wrong memo, right amount | Ignored. |
+| Top-up NIM from someone other than the agent, or less than quoted | Ignored: a top-up only counts as arrived when the agent's own wallet sends the full amount, so nobody can mark it done with a few NIM and the memo. |
 | User sends less than quoted | Payout recalculated from the NIM received at the locked rate, and explained on screen and to the agent. |
 | Payment arrives after the 30-minute quote | Still honoured: we keep watching for 24 hours. |
 | Double tap on "Send" | One order per wallet per 3 seconds; the button shows a spinner. |
-| Agent goes offline | Hidden from new orders instantly. |
+| Agent goes offline | Hidden from new orders instantly. An agent whose console hasn't been open for 12 hours (`AGENT_IDLE_HOURS`) is shown offline too, so nobody pays an agent who isn't there. |
 | Payout is late | "Not received?" reports it, alerts the agent on Telegram and keeps the on-chain record. |
-| Rate API down | Last good rate is served (up to 6h) so the app never goes blank. |
+| Rate API down | Last good rate is shown (up to 6h) so the app never goes blank, but a new order only locks a rate less than 10 minutes old. |
 | Nimiq node down | Multiple RPC URLs with failover and retry; a clear "your order is safe" message. |
 | Database missing in production | Orders are refused with a clear message rather than silently lost. |
 | Agent console | Secret key per agent, header-only, never in the browser bundle. |
@@ -262,13 +263,14 @@ Nimiq has no general smart contracts, so the bond is deliberately simple and ful
 2. An agent sends NIM to it with the memo `NIMPOINT-BOND-<AGENT ID>`, in one tap from the agent console.
 3. The bond is computed from the chain every time: deposits with that memo, minus payouts carrying `NIMPOINT-BONDOUT-<AGENT ID>`, and never more than the wallet really holds. The database is not trusted for it.
 4. Every cash-out that is paid on-chain but not yet finished counts against the bond. A new cash-out is accepted only if it fits in what is left.
-5. If a customer is not paid, the operator refunds them from the bond wallet (with the `BONDOUT` memo, so the agent's bond drops on-chain) and closes the report.
+5. If a customer is not paid, the operator refunds them from the bond wallet (with the `BONDOUT` memo, so the agent's bond drops on-chain) and closes the report with that transaction's hash. NimPoint checks the refund on-chain before closing: it must come from the bond wallet, carry the agent's `BONDOUT` memo, go to the wallet that really paid, and cover the NIM the customer sent. One refund can close one order only.
+6. All agents share one bond wallet. If their deposits ever add up to more than it really holds, every bond is scaled down by the same factor, so the bonds together never promise more NIM than is there.
 
 What this does and does not cover, honestly:
 
 - It covers **cash-outs**, where the blockchain proves the agent received the customer's NIM.
 - It does not cover **top-ups**. There the customer sends Naira first, and no blockchain can prove a bank transfer, so the agent checks their bank before sending NIM.
-- Refunds are paid by the operator, by hand. The bond makes sure the money is there; it does not make the refund automatic.
+- Refunds are paid by the operator, by hand. The bond makes sure the money is there; it does not make the refund automatic. But an order can only be closed as refunded with a refund NimPoint has found on-chain.
 - If several customers pay at the very same moment, exposure can briefly pass the bond, because a payment already on the blockchain cannot be refused.
 
 Customer NIM still goes wallet-to-wallet and is never held by NimPoint. Agent bonds are the only funds NimPoint holds.
@@ -281,12 +283,12 @@ NimPoint is honest about what it cannot do yet. A reader deciding whether to tru
 | --- | --- | --- |
 | **The Naira leg cannot be verified.** NimPoint sees every NIM payment on-chain, but it cannot see inside a bank. An agent could tap "I've sent" without sending. | The app is not connected to any bank or payment provider. | The agent's bond, the 24-hour report window, the public record and ratings. |
 | **Top-ups are not covered by the bond.** The customer sends Naira first. | No blockchain can prove a bank transfer happened, so there is nothing objective to refund against. | Agents are vetted and added by the operator. Customers can report and the agent's record is public. |
-| **Refunds are manual.** The operator pays them from the bond wallet by hand. | Nimiq has no general smart contracts to release a bond automatically. | Bond movements are on-chain with a fixed memo, so anyone can audit them. |
+| **Refunds are manual.** The operator pays them from the bond wallet by hand. | Nimiq has no general smart contracts to release a bond automatically. | A refund is only accepted once it is verified on-chain (bond wallet, `BONDOUT` memo, the paying wallet, full amount). Bond movements are public, so anyone can audit them. |
 | **The operator holds the bond wallet.** Agents must trust the operator with their deposit. | Same reason: no contract can hold it. | The wallet is public, and each agent's balance can be recomputed from the chain. |
 | **Agents are few and hand-picked.** There is no self-service sign-up. | Letting anyone become an agent before bonds are funded would put customers at risk. | Planned once bonds are in regular use. |
 | **Small orders only.** ₦20,000 per order at most. | Keeps the loss small if something goes wrong while the network of agents is young. | Each agent can also set a lower limit. |
 | **Rates move.** The rate is locked for 30 minutes, and the agent carries the price risk in that time. | NIM is volatile. | The agent's spread (1.5% by default) pays for it. |
-| **Regulation.** Peer-to-peer crypto trading sits in a changing legal area in Nigeria. | Outside the app's control. | NimPoint never holds customer funds and does not present itself as a bank or exchange. Operators are responsible for following local rules. |
+| **Regulation.** The Central Bank of Nigeria's *Regulations for the Operations of Non-Security Virtual Assets in Nigeria* took effect on 5 November 2026. They bring platform-facilitated P2P naira conversions under a licence and approval regime, with a 180-day window for existing providers, and expect platforms to reconcile the crypto leg of each trade with its naira leg. | Outside the app's control. Being non-custodial does not by itself exempt a P2P platform. | NimPoint is a competition prototype with small capped orders. Before any commercial launch the operator must obtain the approvals that apply. NimPoint links every NIM payment to its order and the agent's payout reference, but it cannot verify the naira leg itself (see the first row). |
 | **Real usage is still early.** | The app is new. | The proof page shows real-money and test-network activity on separate tabs, so nothing is overstated. |
 
 ## Architecture
@@ -380,7 +382,7 @@ All responses are JSON. Errors are `{ "error": "Plain sentence telling the user 
 | GET | `/api/proof` | `?network=testnet` optional | Public usage stats, registered users and bonds |
 | GET | `/api/users?wallet=NQ..` | | Is this wallet registered, and how many are |
 | POST | `/api/users` | `{ wallet, message, publicKey, signature, network? }` | Register a wallet with its own signature |
-| POST | `/api/admin` | header `x-admin-key`, `{ action: "resolve", id, outcome }` | Operator closes a reported order: `agent_paid` or `refunded` |
+| POST | `/api/admin` | header `x-admin-key`, `{ action: "resolve", id, outcome, refundHash? }` | Operator closes a reported order: `agent_paid`, or `refunded` with the on-chain refund `refundHash` (verified) |
 
 ## Run it locally
 
@@ -457,7 +459,7 @@ Inspired by the clarity of top consumer fintech, built for Lagos:
 - **Logo:** an original mark, a gold location pin (a cash point near you) with the Naira double bar inside.
 - **3D:** a gold NimPoint coin in React Three Fiber, lit with studio light-formers generated in code (no HDR download inside the webview). Falls back to an SVG coin if WebGL is unavailable.
 - **Motion:** rolling digits, spring segmented controls, draggable bottom sheets, animated timeline. Enter-only page transitions so a throttled webview never shows a blank screen. `prefers-reduced-motion` respected.
-- **Passcode:** a 4-digit device passcode (SHA-256 hashed, stored only on the phone) protects the app on shared phones. Five wrong tries trigger a 30-second lock. "Forgot passcode" resets it; funds are never at risk because they stay in Nimiq Pay.
+- **Passcode:** a 4-digit device passcode (SHA-256 hashed, stored only on the phone) keeps NimPoint private on a shared phone. It is a screen lock, not an authentication factor: "Forgot passcode" resets it on the device, which is fine because funds stay in Nimiq Pay and every payment is approved there. Five wrong tries trigger a 30-second lock. The first screen says this in one line.
 - **Accessibility:** 16px+ inputs (no iOS zoom), 44px+ touch targets, ARIA labels on keypad, tabs, switches and ratings.
 
 ## Cross-platform support

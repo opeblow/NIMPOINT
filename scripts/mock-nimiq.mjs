@@ -35,7 +35,10 @@ createServer(async (req, res) => {
     case 'getTransactionByHash': return ok(txs.find((t) => t.hash === params[0]) ?? null);
     case 'getTransactionsByAddress': {
       const a = norm(params[0]);
-      return ok(txs.filter((t) => norm(t.to) === a || norm(t.from) === a).slice(0, params[1] ?? 100));
+      let list = txs.filter((t) => norm(t.to) === a || norm(t.from) === a);
+      // Like Albatross: startAt is the last hash of the previous page, and the next page begins after it.
+      if (params[2]) list = list.slice(list.findIndex((t) => t.hash === params[2]) + 1);
+      return ok(list.slice(0, params[1] ?? 100));
     }
     case 'getAccountByAddress': {
       const a = norm(params[0]);

@@ -14,14 +14,15 @@ import {
   setOnline,
   startAgentSend,
   syncOrder,
+  touchAgent,
 } from '@/lib/orders';
-import { fail, handle, ok } from '@/lib/http';
+import { clientIp, fail, handle, ok } from '@/lib/http';
 import { store } from '@/lib/store';
 
 export const dynamic = 'force-dynamic';
 
 const keyFrom = (req: Request) => req.headers.get('x-agent-key');
-const ipFrom = (req: Request) => req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
+const ipFrom = clientIp;
 
 /** Max 10 wrong keys per IP per 15 minutes: guessing the agent key is not practical. */
 async function authAgent(req: Request) {
@@ -47,7 +48,7 @@ export async function GET(req: Request) {
   try {
     const { agent, error } = await authAgent(req);
     if (!agent) return error;
-    const orders = await dashboard(agent.id);
+    const [orders] = await Promise.all([dashboard(agent.id), touchAgent(agent.id)]);
     // An agent who has only ever served test wallets sees their test record, clearly marked.
     const net = orders.some((o) => netOf(o) === 'mainnet') || !orders.length ? 'mainnet' : 'testnet';
     const [info, bondView] = await Promise.all([publicAgent(agent, net), bondConfig() ? publicAgent(agent, bondConfig()!.network) : null]);

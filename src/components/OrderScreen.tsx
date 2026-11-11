@@ -385,7 +385,7 @@ function Headline({ order, agentName, waitingChain }: { order: Order; agentName:
     completed: [
       'All done',
       order.resolution === 'refunded'
-        ? `NimPoint refunded you from ${agentName}'s bond.`
+        ? `NimPoint refunded you ${f.nim(order.refundTx?.nim ?? order.tx?.nim ?? order.nim)} from ${agentName}'s bond. The refund is on-chain.`
         : order.resolution === 'agent_paid'
           ? `NimPoint checked this order: ${agentName} paid ${payout}.`
           : order.autoCompleted
@@ -480,6 +480,13 @@ function Receipt({ order, agentName }: { order: Order; agentName: string }) {
       'Transaction',
       <a key="t" href={EXPLORER_TX(order.tx.hash, order.network)} target="_blank" rel="noreferrer" className="font-mono text-ink underline underline-offset-2">
         {order.tx.hash.slice(0, 8)}…{order.tx.hash.slice(-6)}
+      </a>,
+    ]);
+  if (order.refundTx)
+    rows.push([
+      'Refund',
+      <a key="r" href={EXPLORER_TX(order.refundTx.hash, order.network)} target="_blank" rel="noreferrer" className="font-mono text-ink underline underline-offset-2">
+        {order.refundTx.hash.slice(0, 8)}…{order.refundTx.hash.slice(-6)}
       </a>,
     ]);
   if (order.receipt) rows.push(['Receipt', order.receipt.verified ? 'Signed by your wallet ✓' : 'Confirmed']);

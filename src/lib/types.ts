@@ -78,6 +78,8 @@ export interface Order {
   autoCompleted?: boolean;
   /** How NimPoint closed a reported order: the agent had paid, or the customer was refunded from the bond. */
   resolution?: 'agent_paid' | 'refunded';
+  /** The on-chain refund paid from the agent's bond, when the order was closed as refunded. */
+  refundTx?: OnchainTx;
   /** Given only to the order's creator. Needed to confirm, rate or dispute. Never shown publicly. */
   secret?: string;
   /**

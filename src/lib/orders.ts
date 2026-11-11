@@ -2,9 +2,9 @@ import 'server-only';
 import { createHash, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
 import { getAgent, listAgents, supports, type Agent } from './agents';
 import { bondConfig, bondNim } from './bond';
-import { bondMemo, LIMITS, MEMO_PREFIX, QUOTE_TTL_MS, type Network } from './config';
+import { bondMemo, bondOutMemo, LIMITS, MEMO_PREFIX, QUOTE_TTL_MS, type Network } from './config';
 import { ngn as fmtNgn } from './format';
-import { getTransaction, normalizeAddress, recentTransactions, sameAddress, testnetEnabled, type ChainTx } from './nimiq-rpc';
+import { getTransaction, normalizeAddress, ownerOf, sameAddress, testnetEnabled, transactionHistory, type ChainTx } from './nimiq-rpc';
 import { agentRate, getQuote, nimFor } from './rates';
 import { persistent, store } from './store';
 import { alertAgent } from './telegram';
@@ -39,6 +39,7 @@ const K = {
   idem: (w: string, key: string) => `idem:${normalizeAddress(w)}:${key}`,
   alert: (what: string) => `alert:${what}`,
   online: (a: string) => `agent:online:${a}`,
+  seen: (a: string) => `agent:seen:${a}`,
   stats: (a: string, net: Network = 'mainnet') => (net === 'mainnet' ? `agent:stats:${a}` : `agent:stats:${net}:${a}`),
 };
 
@@ -55,6 +56,9 @@ const EXTRA_THROTTLE_MS = 60_000;
 const AUTO_COMPLETE_MS = Number(process.env.AUTO_COMPLETE_MS) || 24 * 3600 * 1000;
 /** How long an agent's started NIM send blocks another send. */
 export const SEND_LOCK_MS = 10 * 60_000;
+
+/** A rate older than this is fine to show but never locked into an order. */
+const ORDER_RATE_MAX_AGE_MS = 10 * 60_000;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -114,12 +118,25 @@ async function notifyPayments(order: Order) {
 
 /* ───────────────────────────── agents ───────────────────────────── */
 
+/** An agent who hasn't opened the console (or toggled online) for this long is shown offline. */
+const AGENT_IDLE_MS = (Number(process.env.AGENT_IDLE_HOURS) || 12) * 3600_000;
+
+/**
+ * Online means: not switched off, and seen recently. Agents who have never opened the console since this
+ * check existed stay online until they do, so an existing deployment doesn't go dark on upgrade.
+ */
 export async function isOnline(agentId: string) {
-  return (await store.get<string>(K.online(agentId))) !== '0';
+  const [flag, seen] = await Promise.all([store.get<string>(K.online(agentId)), store.get<number>(K.seen(agentId))]);
+  // String(): Redis hands back '0' as the number 0.
+  if (String(flag) === '0') return false;
+  return !seen || Date.now() - Number(seen) < AGENT_IDLE_MS;
 }
 
+/** The agent is here: their console is open, or they just used it. */
+export const touchAgent = (agentId: string) => store.set(K.seen(agentId), Date.now(), 30 * 24 * 3600);
+
 export async function setOnline(agentId: string, online: boolean) {
-  await store.set(K.online(agentId), online ? '1' : '0');
+  await Promise.all([store.set(K.online(agentId), online ? '1' : '0'), touchAgent(agentId)]);
 }
 
 const agentOrders = async (agentId: string, net: Network) =>
@@ -273,6 +290,10 @@ export async function createOrder(input: {
       throw new OrderError('Hang on, your order is being created.', 429);
     }
     const quote = await getQuote();
+    // The last good rate keeps screens working when CoinGecko is down, but a price is only locked on a fresh rate.
+    if (Date.now() - quote.updatedAt > ORDER_RATE_MAX_AGE_MS) {
+      throw new OrderError("We can't get a fresh NIM price right now, so we won't lock one. Please try again in a few minutes.", 503);
+    }
     const spread = input.kind === 'cashout' ? agent.cashoutSpreadBps : agent.topupSpreadBps;
     const rate = agentRate(quote.mid, input.kind, spread);
     const now = Date.now();
@@ -327,9 +348,24 @@ const awaitingNim = (o: Order) =>
 const forOrder = (o: Order, t: ChainTx) => sameAddress(t.to, o.nimRecipient) && t.memo.trim().toUpperCase() === o.memo;
 const toOnchain = (t: ChainTx) => ({ hash: t.hash, from: t.from, to: t.to, nim: t.nim, at: t.timestamp || Date.now() });
 
+/**
+ * Can `tx` settle this order? Cash-out: any payment to the agent with the memo (a short one is paid out pro rata).
+ * Top-up: only the agent's own wallet (or its Nimiq Pay HTLC), for the full NIM quoted. Otherwise anyone could
+ * mark a top-up "arrived" with a few NIM and the memo, and an agent could underpay and still see the order close.
+ */
+async function canSettle(order: Order, tx: ChainTx): Promise<boolean> {
+  if (!forOrder(order, tx)) return false;
+  if (order.kind !== 'topup') return true;
+  if (tx.nim + 0.005 < order.nim) return false;
+  const agent = getAgent(order.agentId);
+  if (!agent) return false;
+  if (sameAddress(tx.from, agent.address)) return true;
+  return sameAddress(await ownerOf(tx.from, netOf(order)), agent.address);
+}
+
 /** Mark the order paid by `tx`. Changes `order` in place; the caller saves it. */
 async function applyPayment(order: Order, tx: ChainTx): Promise<boolean> {
-  if (!forOrder(order, tx)) return false;
+  if (!(await canSettle(order, tx))) return false;
   // A transaction can settle exactly one order.
   const claimed = await store.setNx(K.tx(tx.hash), order.id, ORDER_TTL);
   // String(): Redis hands back an all-digit id as a number.
@@ -347,7 +383,10 @@ async function applyPayment(order: Order, tx: ChainTx): Promise<boolean> {
 function recordExtras(order: Order, txs: ChainTx[]): boolean {
   if (!order.tx) return false;
   const known = new Set([order.tx.hash, ...(order.extraPayments ?? []).map((t) => t.hash)].map((h) => h.toLowerCase()));
-  const fresh = txs.filter((t) => forOrder(order, t) && !known.has(t.hash.toLowerCase()));
+  // Top-up: only more NIM from the same sender as the settling payment is an overpayment; anything else is noise.
+  const fresh = txs.filter(
+    (t) => forOrder(order, t) && !known.has(t.hash.toLowerCase()) && (order.kind !== 'topup' || sameAddress(t.from, order.tx!.from)),
+  );
   if (!fresh.length) return false;
   order.extraPayments = [...(order.extraPayments ?? []), ...fresh.map(toOnchain)];
   return true;
@@ -397,7 +436,10 @@ async function chainSync(order: Order, force: boolean): Promise<Order> {
   let txs: ChainTx[] | null = null;
   try {
     // Oldest first: the first payment settles the order, later ones are extras.
-    txs = (await recentTransactions(order.nimRecipient, 50, netOf(order))).filter((t) => forOrder(order, t)).sort((a, b) => a.timestamp - b.timestamp);
+    // Everything since the order was made (a minute of slack for clock skew), however busy the address is.
+    txs = (await transactionHistory(order.nimRecipient, netOf(order), { since: order.createdAt - 60_000 }))
+      .filter((t) => forOrder(order, t))
+      .sort((a, b) => a.timestamp - b.timestamp);
   } catch (err) {
     console.warn('[sync]', order.id, (err as Error).message);
   }
@@ -542,18 +584,58 @@ export async function disputeOrder(order: Order, note?: string) {
 }
 
 /**
- * NimPoint closes a reported order after looking into it: either the agent really paid,
- * or the customer was refunded from the agent's bond. Frees the bond tied to the order.
+ * A refund is only believed once the chain shows it: NIM that left the bond wallet (when bonds are on)
+ * with the agent's BONDOUT memo, went to the wallet that really paid, and covers what the customer sent.
+ * Each refund transaction can close one order only.
  */
-export async function resolveDispute(order: Order, outcome: 'agent_paid' | 'refunded', note?: string) {
-  const next = await update(order.id, (o) => {
-    if (o.status !== 'disputed') throw new OrderError('Only reported orders can be resolved.');
-    o.resolution = outcome;
-    const what = outcome === 'refunded' ? "Refunded from the agent's bond" : 'Checked by NimPoint: the agent paid';
-    transition(o, 'completed', note ? `${what}. ${note.slice(0, 200)}` : what);
-  });
-  await store.del(K.stats(next.agentId, netOf(next)));
-  return next;
+async function verifyRefund(order: Order, hash: string): Promise<ChainTx> {
+  if (order.kind !== 'cashout' || !order.tx) {
+    throw new OrderError('Only a cash-out paid on-chain can be refunded from the bond. Close it as agent_paid or leave it open.');
+  }
+  const net = netOf(order);
+  const tx = await getTransaction(hash, net);
+  if (!tx) throw new OrderError('That refund transaction is not confirmed on-chain yet. Wait for a block and try again.');
+  const cfg = bondConfig();
+  if (cfg && cfg.network === net && !sameAddress(tx.from, cfg.address)) throw new OrderError('The refund must be paid from the bond wallet.');
+  if (tx.memo.trim().toUpperCase() !== bondOutMemo(order.agentId)) {
+    throw new OrderError(`The refund must carry the memo ${bondOutMemo(order.agentId)}, so it comes off this agent's bond.`);
+  }
+  const payer = await ownerOf(order.tx.from, net);
+  if (!sameAddress(tx.to, payer) && !sameAddress(tx.to, order.wallet)) throw new OrderError("The refund must go to the customer's wallet.");
+  if (tx.nim + 0.005 < order.tx.nim) throw new OrderError(`The refund is ${tx.nim} NIM; the customer sent ${order.tx.nim} NIM.`);
+  return tx;
+}
+
+/**
+ * NimPoint closes a reported order after looking into it: either the agent really paid,
+ * or the customer was refunded from the agent's bond (proven on-chain). Frees the bond tied to the order.
+ */
+export async function resolveDispute(order: Order, outcome: 'agent_paid' | 'refunded', note?: string, refundHash?: string) {
+  if (order.status !== 'disputed') throw new OrderError('Only reported orders can be resolved.');
+  let refund: ChainTx | undefined;
+  if (outcome === 'refunded') {
+    if (!refundHash) throw new OrderError('Add the hash of the refund transaction.');
+    refund = await verifyRefund(order, refundHash);
+    const claimed = await store.setNx(`refund:${refund.hash.toLowerCase()}`, order.id, ORDER_TTL);
+    if (!claimed && String(await store.get<string>(`refund:${refund.hash.toLowerCase()}`)) !== order.id) {
+      throw new OrderError('That refund transaction already closed another order.');
+    }
+  }
+  try {
+    const next = await update(order.id, (o) => {
+      if (o.status !== 'disputed') throw new OrderError('Only reported orders can be resolved.');
+      o.resolution = outcome;
+      if (refund) o.refundTx = toOnchain(refund);
+      const what = refund ? `Refunded ${refund.nim} NIM from the agent's bond (tx ${refund.hash.slice(0, 10)}…)` : 'Checked by NimPoint: the agent paid';
+      transition(o, 'completed', note ? `${what}. ${note.slice(0, 200)}` : what);
+    });
+    await store.del(K.stats(next.agentId, netOf(next)));
+    return next;
+  } catch (err) {
+    // The order was not closed, so the refund transaction is free to close it later.
+    if (refund) await store.del(`refund:${refund.hash.toLowerCase()}`);
+    throw err;
+  }
 }
 
 /**

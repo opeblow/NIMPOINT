@@ -2,7 +2,7 @@ import { listAgents } from '@/lib/agents';
 import { bondConfig } from '@/lib/bond';
 import { asNetwork, MEMO_PREFIX, type Network } from '@/lib/config';
 import { handle, ok } from '@/lib/http';
-import { ownerOf, recentTransactions, sameAddress } from '@/lib/nimiq-rpc';
+import { ownerOf, sameAddress, transactionHistory } from '@/lib/nimiq-rpc';
 import { agentBond, allOrders, healNetwork, netOf } from '@/lib/orders';
 import { store } from '@/lib/store';
 import type { Proof } from '@/lib/types';
@@ -17,7 +17,7 @@ const settled = new Set(['paid', 'payout_sent', 'completed', 'disputed']);
 
 async function chainCount(net: Network) {
   const agents = listAgents();
-  const txs = (await Promise.all(agents.map((a) => recentTransactions(a.address, 500, net).catch(() => [])))).flat();
+  const txs = (await Promise.all(agents.map((a) => transactionHistory(a.address, net, { max: 5_000, pageSize: 500 }).catch(() => [])))).flat();
   const memoTxs = txs.filter((t) => MEMO_RE.test(t.memo.trim().toUpperCase()) && agents.some((a) => sameAddress(a.address, t.to)));
   const senders = [...new Set(memoTxs.map((t) => t.from))].slice(0, 200);
   const owners = await Promise.all(senders.map((s) => ownerOf(s, net).catch(() => s)));

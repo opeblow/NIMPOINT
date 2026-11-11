@@ -48,7 +48,9 @@ export async function GET(req: Request) {
   try {
     const wallet = nimiqAddress.parse(new URL(req.url).searchParams.get('wallet') ?? '');
     const orders = await Promise.all((await ordersForWallet(wallet)).map(autoComplete));
-    return ok({ orders: orders.map((o) => publicOrder(o)) });
+    // Anyone can type a wallet address here, so this list never carries bank details, even masked.
+    // The order's own page shows them to the phone that made it.
+    return ok({ orders: orders.map((o) => ({ ...publicOrder(o), bank: undefined })) });
   } catch (err) {
     return handle(err);
   }

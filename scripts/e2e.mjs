@@ -175,6 +175,13 @@ r = await call(`/api/orders/${o3.id}`, { method: 'POST', json: { action: 'confir
 check(r.status === 400, 'cannot confirm top-up before NIM arrives');
 r = await call(`/api/orders/${o3.id}`, { method: 'POST', json: { action: 'fiat_sent' } });
 check(r.body.order.status === 'fiat_sent', 'user marks Naira sent');
+// only the agent, for the full amount, can mark a top-up as arrived
+await send(USER1, USER2, o3.nim, o3.memo, undefined);
+r = await call(`/api/orders/${o3.id}`, { method: 'POST', json: { action: 'sync' } });
+check(r.body.order.status === 'fiat_sent' && !r.body.order.tx, "a payment from someone other than the agent doesn't settle a top-up", r.body.order);
+const shortTopup = await send(AGENT_HTLC, USER2, Math.floor((o3.nim / 2) * 100) / 100, o3.memo, AGENT);
+r = await call('/api/agent', { method: 'POST', key: KEY, json: { action: 'nim_sent', id: o3.id, hash: shortTopup } });
+check(r.body.order?.status === 'fiat_sent' && !r.body.order.tx, "a short payment from the agent doesn't settle a top-up", r.body);
 // agent pays from their own Nimiq Pay HTLC to the user's wallet
 const h3 = await send(AGENT_HTLC, USER2, o3.nim, o3.memo, AGENT);
 r = await call('/api/agent', { method: 'POST', key: KEY, json: { action: 'nim_sent', id: o3.id, hash: h3 } });
@@ -319,6 +326,15 @@ if (AUTO_MS && AUTO_MS <= 20_000) {
   }
 } else skip('auto-complete', 'AUTO_COMPLETE_MS not set to a short test value');
 
+// ── a busy wallet: a payment is still found after many newer transactions (the old scan only saw the last 50)
+await sleep(3200);
+r = await call('/api/orders', { method: 'POST', json: { kind: 'topup', mode: 'cash', agentId: 'yaba-1', wallet: fresh('M'), ngn: 1500 } });
+const busy = r.body.order;
+await send(AGENT_HTLC, fresh('M'), busy.nim, busy.memo, AGENT);
+for (let i = 0; i < 120; i++) await send(HTLC1, fresh('M'), 1, `noise ${i}`, undefined);
+r = await call(`/api/orders/${busy.id}`, { method: 'POST', json: { action: 'sync' } });
+check(r.body.order?.status === 'paid' && r.body.order.tx?.nim === busy.nim, 'payment is found behind 120 newer transactions', r.body.order);
+
 // ── NimPoint resolves a reported order
 if (ADMIN) {
   r = await call('/api/orders', { method: 'POST', json: { kind: 'cashout', mode: 'cash', agentId: 'yaba-1', wallet: fresh('L'), ngn: 1000 } });
@@ -329,8 +345,39 @@ if (ADMIN) {
   check(r.body.order?.status === 'disputed', 'paid order reported', r.body);
   r = await call('/api/admin', { method: 'POST', admin: 'wrong-admin-key', json: { action: 'resolve', id: o6.id, outcome: 'refunded' } });
   check(r.status === 401, 'admin actions need the admin key', r.body);
-  r = await call('/api/admin', { method: 'POST', admin: ADMIN, json: { action: 'resolve', id: o6.id, outcome: 'refunded', note: 'Refund tx sent' } });
-  check(r.body.order?.status === 'completed' && r.body.order.resolution === 'refunded', 'reported order resolved as refunded from the bond', r.body);
+  // A refund is only believed once the chain shows it.
+  const paid6 = (await call(`/api/orders/${o6.id}`)).body.order.tx;
+  const bondOut = 'NIMPOINT-BONDOUT-YABA-1';
+  const refundFrom = BOND ?? AGENT;
+  r = await call('/api/admin', { method: 'POST', admin: ADMIN, json: { action: 'resolve', id: o6.id, outcome: 'refunded' } });
+  check(r.status === 400 && /hash/.test(r.body.error), 'a refund needs the refund transaction', r.body);
+  const fakeRefund = await send(refundFrom, fresh('L'), paid6.nim, 'sorry', undefined);
+  r = await call('/api/admin', { method: 'POST', admin: ADMIN, json: { action: 'resolve', id: o6.id, outcome: 'refunded', refundHash: fakeRefund } });
+  check(r.status === 400 && /memo/.test(r.body.error), 'a refund without the BONDOUT memo is refused', r.body);
+  const shortRefund = await send(refundFrom, fresh('L'), paid6.nim / 2, bondOut, undefined);
+  r = await call('/api/admin', { method: 'POST', admin: ADMIN, json: { action: 'resolve', id: o6.id, outcome: 'refunded', refundHash: shortRefund } });
+  check(r.status === 400 && /customer sent/.test(r.body.error), 'a refund smaller than the payment is refused', r.body);
+  const elsewhere = await send(refundFrom, USER2, paid6.nim, bondOut, undefined);
+  r = await call('/api/admin', { method: 'POST', admin: ADMIN, json: { action: 'resolve', id: o6.id, outcome: 'refunded', refundHash: elsewhere } });
+  check(r.status === 400 && /customer's wallet/.test(r.body.error), 'a refund to someone else is refused', r.body);
+  if (BOND) {
+    const notBond = await send(AGENT, fresh('L'), paid6.nim, bondOut, undefined);
+    r = await call('/api/admin', { method: 'POST', admin: ADMIN, json: { action: 'resolve', id: o6.id, outcome: 'refunded', refundHash: notBond } });
+    check(r.status === 400 && /bond wallet/.test(r.body.error), 'a refund must come from the bond wallet', r.body);
+  }
+  const bondBefore = BOND ? (await call('/api/agents')).body.agents[0].bond.nim : 0;
+  const refund = await send(refundFrom, fresh('L'), paid6.nim, bondOut, undefined);
+  r = await call('/api/admin', { method: 'POST', admin: ADMIN, json: { action: 'resolve', id: o6.id, outcome: 'refunded', note: 'Refund tx sent', refundHash: refund } });
+  check(
+    r.body.order?.status === 'completed' && r.body.order.resolution === 'refunded' && r.body.order.refundTx?.hash === refund,
+    'reported order resolved as refunded, proven on-chain',
+    r.body,
+  );
+  if (BOND) {
+    await sleep(15_500); // the bond book is cached for 15s
+    const bondAfter = (await call('/api/agents')).body.agents[0].bond.nim;
+    check(bondAfter < bondBefore, "the refund comes off the agent's bond on-chain", { bondBefore, bondAfter });
+  }
   r = await call('/api/admin', { method: 'POST', admin: ADMIN, json: { action: 'resolve', id: o6.id, outcome: 'agent_paid' } });
   check(r.status === 400, 'an order is resolved once');
 } else skip('dispute resolution', 'ADMIN_KEY not set');

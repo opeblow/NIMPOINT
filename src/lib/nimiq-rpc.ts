@@ -76,6 +76,7 @@ interface RawTx {
   timestamp?: number;
   confirmations?: number;
   executionResult?: boolean;
+  blockNumber?: number;
 }
 
 const toChainTx = (t: RawTx): ChainTx => ({
@@ -83,26 +84,61 @@ const toChainTx = (t: RawTx): ChainTx => ({
   from: friendlyAddress(t.from),
   to: friendlyAddress(t.to),
   nim: Number(t.value ?? 0) / LUNA_PER_NIM,
-  memo: decodeData(t.recipientData) || decodeData(t.senderData),
+  // The order memo is the data Nimiq Pay attaches for the recipient. Sender data is not a memo and never counts.
+  memo: decodeData(t.recipientData),
   timestamp: Number(t.timestamp ?? Date.now()),
   confirmations: t.confirmations,
 });
 
-/** A payment counts only once it is in a block (pending transactions can still vanish). */
-const confirmed = (t: RawTx) => t.confirmations === undefined || t.confirmations >= 1;
+/**
+ * A payment counts only once the node says it succeeded and it is in a block (pending transactions can still
+ * vanish). A node that leaves these fields out is not trusted: missing means no.
+ */
+const confirmed = (t: RawTx) => t.executionResult === true && ((t.confirmations ?? 0) >= 1 || (t.blockNumber ?? 0) > 0);
 
 export async function getTransaction(hash: string, net: Network = 'mainnet'): Promise<ChainTx | null> {
   const t = await rpc<RawTx | null>('getTransactionByHash', [hash], net).catch((e) => {
     if (e instanceof RpcUnavailable) throw e;
     return null;
   });
-  return t && t.executionResult !== false && confirmed(t) ? toChainTx(t) : null;
+  return t && confirmed(t) ? toChainTx(t) : null;
 }
 
 /** Latest successful transactions touching an address, newest first. */
 export async function recentTransactions(address: string, max = 100, net: Network = 'mainnet'): Promise<ChainTx[]> {
   const txs = await rpc<RawTx[]>('getTransactionsByAddress', [friendlyAddress(address), max, null], net);
-  return (txs ?? []).filter((t) => t.executionResult !== false && confirmed(t)).map(toChainTx);
+  return (txs ?? []).filter(confirmed).map(toChainTx);
+}
+
+/**
+ * Successful transactions touching an address, newest first, read page by page so a busy
+ * address never pushes an order's payment (or a bond deposit) out of view.
+ * Stops at `max` transactions, or once a page reaches transactions older than `since`.
+ */
+export async function transactionHistory(
+  address: string,
+  net: Network = 'mainnet',
+  { since = 0, max = 2_000, pageSize = 100 }: { since?: number; max?: number; pageSize?: number } = {},
+): Promise<ChainTx[]> {
+  const out: ChainTx[] = [];
+  const seen = new Set<string>();
+  let startAt: string | null = null;
+  while (out.length < max) {
+    const page: RawTx[] = (await rpc<RawTx[]>('getTransactionsByAddress', [friendlyAddress(address), pageSize, startAt], net)) ?? [];
+    let fresh = 0;
+    let oldest = Infinity;
+    for (const t of page) {
+      if (seen.has(t.hash)) continue;
+      seen.add(t.hash);
+      fresh++;
+      oldest = Math.min(oldest, Number(t.timestamp ?? Date.now()));
+      if (confirmed(t)) out.push(toChainTx(t));
+    }
+    // A short page is the end of the history; a page with nothing new means the node ignored startAt.
+    if (page.length < pageSize || !fresh || oldest < since) break;
+    startAt = page[page.length - 1].hash;
+  }
+  return out.slice(0, max);
 }
 
 interface RawAccount {
