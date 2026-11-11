@@ -1,6 +1,7 @@
 import 'server-only';
 import { asNetwork, bondMemo, bondOutMemo, type Network } from './config';
-import { getBalance, normalizeAddress, recentTransactions, sameAddress } from './nimiq-rpc';
+import { listAgents } from './agents';
+import { getBalance, normalizeAddress, sameAddress, transactionHistory } from './nimiq-rpc';
 import { store } from './store';
 
 /**
@@ -18,30 +19,51 @@ export function bondConfig(): { address: string; network: Network } | null {
 }
 
 const FRESH_MS = 15_000;
-const key = (agentId: string) => `bond:${agentId}`;
+const BOOK_KEY = 'bond:book';
+type Book = { nim: Record<string, number>; at: number };
+
+/**
+ * Every agent's bond, from the bond wallet's whole history. All agents share one wallet, so if
+ * their deposits add up to more than it really holds (fees, a manual withdrawal), each bond is
+ * scaled down by the same factor: together they can never promise more NIM than is there.
+ */
+async function readBook(): Promise<Book> {
+  const cfg = bondConfig()!;
+  const [txs, balance] = await Promise.all([
+    transactionHistory(cfg.address, cfg.network, { max: 10_000, pageSize: 500 }),
+    getBalance(cfg.address, cfg.network),
+  ]);
+  const ids = listAgents().map((a) => a.id);
+  const byIn = new Map(ids.map((id) => [bondMemo(id), id]));
+  const byOut = new Map(ids.map((id) => [bondOutMemo(id), id]));
+  const net: Record<string, number> = Object.fromEntries(ids.map((id) => [id, 0]));
+  for (const t of txs) {
+    const memo = t.memo.trim().toUpperCase();
+    const inId = byIn.get(memo);
+    const outId = byOut.get(memo);
+    if (inId && sameAddress(t.to, cfg.address)) net[inId] += t.nim;
+    else if (outId && sameAddress(t.from, cfg.address)) net[outId] -= t.nim;
+  }
+  for (const id of ids) net[id] = Math.max(0, net[id]);
+  const total = ids.reduce((s, id) => s + net[id], 0);
+  const scale = total > balance ? Math.max(0, balance) / total : 1;
+  const nim = Object.fromEntries(ids.map((id) => [id, Math.floor(net[id] * scale * 1e5) / 1e5]));
+  return { nim, at: Date.now() };
+}
 
 /** NIM the agent has on deposit. `fresh` skips the short cache (used when an order depends on it). */
 export async function bondNim(agentId: string, fresh = false): Promise<number> {
   const cfg = bondConfig();
   if (!cfg) return 0;
-  const cached = await store.get<{ nim: number; at: number }>(key(agentId));
-  if (!fresh && cached && Date.now() - cached.at < FRESH_MS) return cached.nim;
+  const cached = await store.get<Book>(BOOK_KEY);
+  if (!fresh && cached && Date.now() - cached.at < FRESH_MS) return cached.nim[agentId] ?? 0;
   try {
-    const [txs, balance] = await Promise.all([recentTransactions(cfg.address, 500, cfg.network), getBalance(cfg.address, cfg.network)]);
-    const memoIn = bondMemo(agentId);
-    const memoOut = bondOutMemo(agentId);
-    let net = 0;
-    for (const t of txs) {
-      const memo = t.memo.trim().toUpperCase();
-      if (memo === memoIn && sameAddress(t.to, cfg.address)) net += t.nim;
-      else if (memo === memoOut && sameAddress(t.from, cfg.address)) net -= t.nim;
-    }
-    const nim = Math.max(0, Math.min(net, balance));
-    await store.set(key(agentId), { nim, at: Date.now() }, 3600);
-    return nim;
+    const book = await readBook();
+    await store.set(BOOK_KEY, book, 3600);
+    return book.nim[agentId] ?? 0;
   } catch (err) {
     // The chain is unreachable: a new order must not go ahead on a guess, a listing may show the last known value.
     if (fresh || !cached) throw err;
-    return cached.nim;
+    return cached.nim[agentId] ?? 0;
   }
 }

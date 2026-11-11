@@ -12,6 +12,11 @@ const Action = z.object({
   /** agent_paid: the agent showed proof of payment. refunded: the customer was repaid from the agent's bond. */
   outcome: z.enum(['agent_paid', 'refunded']),
   note: z.string().max(200).optional(),
+  /** Required for refunded: the bond wallet's refund transaction, checked on-chain. */
+  refundHash: z
+    .string()
+    .regex(/^[0-9a-f]{64}$/i, 'refundHash must be a 64-character transaction hash.')
+    .optional(),
 });
 
 /** NimPoint operator actions. Off unless ADMIN_KEY is set. */
@@ -29,7 +34,7 @@ export async function POST(req: Request) {
     const body = Action.parse(await req.json());
     const order = await getOrder(body.id);
     if (!order) return fail('Order not found.', 404);
-    return ok({ order: publicOrder(await resolveDispute(order, body.outcome, body.note), true) });
+    return ok({ order: publicOrder(await resolveDispute(order, body.outcome, body.note, body.refundHash), true) });
   } catch (err) {
     return handle(err);
   }
