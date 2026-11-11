@@ -327,9 +327,24 @@ const awaitingNim = (o: Order) =>
 const forOrder = (o: Order, t: ChainTx) => sameAddress(t.to, o.nimRecipient) && t.memo.trim().toUpperCase() === o.memo;
 const toOnchain = (t: ChainTx) => ({ hash: t.hash, from: t.from, to: t.to, nim: t.nim, at: t.timestamp || Date.now() });
 
+/**
+ * Can `tx` settle this order? Cash-out: any payment to the agent with the memo (a short one is paid out pro rata).
+ * Top-up: only the agent's own wallet (or its Nimiq Pay HTLC), for the full NIM quoted. Otherwise anyone could
+ * mark a top-up "arrived" with a few NIM and the memo, and an agent could underpay and still see the order close.
+ */
+async function canSettle(order: Order, tx: ChainTx): Promise<boolean> {
+  if (!forOrder(order, tx)) return false;
+  if (order.kind !== 'topup') return true;
+  if (tx.nim + 0.005 < order.nim) return false;
+  const agent = getAgent(order.agentId);
+  if (!agent) return false;
+  if (sameAddress(tx.from, agent.address)) return true;
+  return sameAddress(await ownerOf(tx.from, netOf(order)), agent.address);
+}
+
 /** Mark the order paid by `tx`. Changes `order` in place; the caller saves it. */
 async function applyPayment(order: Order, tx: ChainTx): Promise<boolean> {
-  if (!forOrder(order, tx)) return false;
+  if (!(await canSettle(order, tx))) return false;
   // A transaction can settle exactly one order.
   const claimed = await store.setNx(K.tx(tx.hash), order.id, ORDER_TTL);
   // String(): Redis hands back an all-digit id as a number.
@@ -347,7 +362,10 @@ async function applyPayment(order: Order, tx: ChainTx): Promise<boolean> {
 function recordExtras(order: Order, txs: ChainTx[]): boolean {
   if (!order.tx) return false;
   const known = new Set([order.tx.hash, ...(order.extraPayments ?? []).map((t) => t.hash)].map((h) => h.toLowerCase()));
-  const fresh = txs.filter((t) => forOrder(order, t) && !known.has(t.hash.toLowerCase()));
+  // Top-up: only more NIM from the same sender as the settling payment is an overpayment; anything else is noise.
+  const fresh = txs.filter(
+    (t) => forOrder(order, t) && !known.has(t.hash.toLowerCase()) && (order.kind !== 'topup' || sameAddress(t.from, order.tx!.from)),
+  );
   if (!fresh.length) return false;
   order.extraPayments = [...(order.extraPayments ?? []), ...fresh.map(toOnchain)];
   return true;

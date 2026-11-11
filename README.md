@@ -236,6 +236,7 @@ Real money moves through this app, so every edge case has a rule:
 | Wallet says "outcome unknown" | Treated as sent: the Pay button is hidden for 3 minutes while we watch the chain, so the user is never invited to pay twice. |
 | Someone reuses an old transaction hash | A hash can settle exactly one order (atomic lock). |
 | Wrong memo, right amount | Ignored. |
+| Top-up NIM from someone other than the agent, or less than quoted | Ignored: a top-up only counts as arrived when the agent's own wallet sends the full amount, so nobody can mark it done with a few NIM and the memo. |
 | User sends less than quoted | Payout recalculated from the NIM received at the locked rate, and explained on screen and to the agent. |
 | Payment arrives after the 30-minute quote | Still honoured: we keep watching for 24 hours. |
 | Double tap on "Send" | One order per wallet per 3 seconds; the button shows a spinner. |

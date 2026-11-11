@@ -175,6 +175,13 @@ r = await call(`/api/orders/${o3.id}`, { method: 'POST', json: { action: 'confir
 check(r.status === 400, 'cannot confirm top-up before NIM arrives');
 r = await call(`/api/orders/${o3.id}`, { method: 'POST', json: { action: 'fiat_sent' } });
 check(r.body.order.status === 'fiat_sent', 'user marks Naira sent');
+// only the agent, for the full amount, can mark a top-up as arrived
+await send(USER1, USER2, o3.nim, o3.memo, undefined);
+r = await call(`/api/orders/${o3.id}`, { method: 'POST', json: { action: 'sync' } });
+check(r.body.order.status === 'fiat_sent' && !r.body.order.tx, "a payment from someone other than the agent doesn't settle a top-up", r.body.order);
+const shortTopup = await send(AGENT_HTLC, USER2, Math.floor((o3.nim / 2) * 100) / 100, o3.memo, AGENT);
+r = await call('/api/agent', { method: 'POST', key: KEY, json: { action: 'nim_sent', id: o3.id, hash: shortTopup } });
+check(r.body.order?.status === 'fiat_sent' && !r.body.order.tx, "a short payment from the agent doesn't settle a top-up", r.body);
 // agent pays from their own Nimiq Pay HTLC to the user's wallet
 const h3 = await send(AGENT_HTLC, USER2, o3.nim, o3.memo, AGENT);
 r = await call('/api/agent', { method: 'POST', key: KEY, json: { action: 'nim_sent', id: o3.id, hash: h3 } });
