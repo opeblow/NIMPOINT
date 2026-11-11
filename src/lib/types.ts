@@ -80,6 +80,11 @@ export interface Order {
   resolution?: 'agent_paid' | 'refunded';
   /** Given only to the order's creator. Needed to confirm, rate or dispute. Never shown publicly. */
   secret?: string;
+  /**
+   * Cash pickup: 6 digits only the customer's phone is shown. The agent types it in before handing over cash.
+   * Never on-chain, never in public views, never shown to the agent.
+   */
+  pickupCode?: string;
 }
 
 export interface PublicAgent {

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { autoComplete, createOrder, ordersForWallet, publicOrder } from '@/lib/orders';
+import { autoComplete, createOrder, ordersForWallet, ownerOrder, publicOrder } from '@/lib/orders';
 import { handle, ok } from '@/lib/http';
 import { bankName } from '@/lib/banks';
 
@@ -37,8 +37,8 @@ export async function POST(req: Request) {
       ? { ...body.bank, bankName: bankName(body.bank.bankCode) ?? 'Bank' }
       : undefined;
     const order = await createOrder({ ...body, bank });
-    // The creator gets the order secret once; it unlocks confirm, rate and dispute.
-    return ok({ order: { ...publicOrder(order, true), secret: order.secret } });
+    // The creator gets the order secret once; it unlocks confirm, rate, dispute and the pickup code.
+    return ok({ order: { ...ownerOrder(order), secret: order.secret } });
   } catch (err) {
     return handle(err);
   }

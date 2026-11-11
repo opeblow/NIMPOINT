@@ -10,7 +10,7 @@ NimPoint is a peer-to-peer marketplace that connects Nimiq Pay users with indepe
 | --- | --- | --- |
 | Your Nimiq wallet address | To link orders to you and show your history | Public on-chain anyway; shown shortened on the proof page |
 | Order amount, rate, memo, status, timestamps | To run the order and show its progress | You and the agent |
-| Bank name, account number, account name (bank cash-outs only) | So the agent can pay you | Full number: only the paying agent. Everyone else sees `••••1234` |
+| Bank name, account number, account name (bank cash-outs only) | So the agent can pay you | Full details: only you (on the phone that placed the order) and the paying agent. Everyone else sees the name as initials and the number as `••••1234` |
 | Your rating and optional comment | Agent reputation | Aggregated on agent profiles |
 | Optional signed receipt (public key + signature) | Proof you confirmed receipt | You and the agent |
 | Registration (optional): your wallet address and the time you registered | To count real users. You sign a message to prove the wallet is yours; the signature is checked and not kept | Only the total is public |

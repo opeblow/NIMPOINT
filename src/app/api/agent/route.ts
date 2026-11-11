@@ -59,7 +59,7 @@ export async function GET(req: Request) {
 
 const Action = z.discriminatedUnion('action', [
   z.object({ action: z.literal('online'), online: z.boolean() }),
-  z.object({ action: z.literal('payout_sent'), id: z.string(), ref: z.string().max(80).optional() }),
+  z.object({ action: z.literal('payout_sent'), id: z.string(), ref: z.string().max(80).optional(), code: z.string().max(12).optional() }),
   z.object({ action: z.literal('nim_sending'), id: z.string(), retry: z.boolean().optional() }),
   z.object({ action: z.literal('nim_cancelled'), id: z.string() }),
   z.object({ action: z.literal('nim_sent'), id: z.string(), hash: z.string().max(4000) }),
@@ -78,7 +78,7 @@ export async function POST(req: Request) {
     if (!order || order.agentId !== agent.id) return fail('Order not found.', 404);
     const next =
       body.action === 'payout_sent'
-        ? await markPayoutSent(order, agent, body.ref)
+        ? await markPayoutSent(order, agent, body.ref, body.code)
         : body.action === 'nim_sending'
           ? await startAgentSend(order, agent, body.retry)
           : body.action === 'nim_cancelled'

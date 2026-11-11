@@ -9,7 +9,7 @@ import { agentRate, getQuote, nimFor } from './rates';
 import { persistent, store } from './store';
 import { alertAgent } from './telegram';
 import type { AgentStats, BankAccount, Bond, Order, OrderKind, OrderStatus, PayoutMode, PublicAgent } from './types';
-import { verifyNimiqMessage } from './signature';
+import { addressFromPublicKey, verifyNimiqMessage } from './signature';
 
 export class OrderError extends Error {
   constructor(
@@ -25,6 +25,9 @@ class Conflict extends Error {}
 
 const ID_ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
 const newId = () => Array.from({ length: 8 }, () => ID_ALPHABET[randomInt(ID_ALPHABET.length)]).join('');
+/** The order ID is public (it is in the on-chain memo), so cash pickup needs its own secret code. */
+const newPickupCode = () => String(randomInt(1_000_000)).padStart(6, '0');
+const needsPickupCode = (o: Pick<Order, 'kind' | 'mode'>) => o.kind === 'cashout' && o.mode === 'cash';
 
 const K = {
   order: (id: string) => `order:${id}`,
@@ -292,6 +295,7 @@ export async function createOrder(input: {
       expiresAt: now + QUOTE_TTL_MS,
       events: [],
       secret: randomBytes(24).toString('hex'),
+      pickupCode: needsPickupCode(input) ? newPickupCode() : undefined,
       network: net,
     };
     transition(order, order.status);
@@ -474,10 +478,26 @@ export async function markFiatSent(order: Order) {
   return next;
 }
 
-export async function markPayoutSent(order: Order, agent: Agent, ref?: string) {
+/** True when this cash pickup can only be released with the customer's code. Old orders made before codes existed are exempt. */
+export const pickupCodeRequired = (o: Order) => needsPickupCode(o) && Boolean(o.pickupCode);
+
+const sameCode = (a: string, b: string) => {
+  const x = createHash('sha256').update(a).digest();
+  const y = createHash('sha256').update(b).digest();
+  return timingSafeEqual(x, y);
+};
+
+export async function markPayoutSent(order: Order, agent: Agent, ref?: string, code?: string) {
   if (order.agentId !== agent.id) throw new OrderError('Not your order.', 403);
   return update(order.id, (o) => {
     if (o.kind !== 'cashout' || o.status !== 'paid') throw new OrderError('Only paid cash-outs can be marked as sent.');
+    if (pickupCodeRequired(o)) {
+      const typed = (code ?? '').replace(/\D/g, '');
+      if (!typed) throw new OrderError("Type in the 6-digit pickup code from the customer's phone first.");
+      if (!sameCode(typed, o.pickupCode!)) {
+        throw new OrderError("That code doesn't match. Don't hand over cash. Ask the customer to open this order in their own NimPoint app.");
+      }
+    }
     o.payoutRef = ref?.slice(0, 80);
     transition(o, 'payout_sent');
   });
@@ -487,7 +507,10 @@ export async function confirmReceived(
   order: Order,
   receipt?: { message: string; publicKey: string; signature: string },
 ) {
-  const verified = receipt ? verifyNimiqMessage(receipt.message, receipt.publicKey, receipt.signature) : false;
+  // A receipt counts only if it is signed by the wallet that made the order.
+  const verified = receipt
+    ? addressFromPublicKey(receipt.publicKey) === normalizeAddress(order.wallet) && verifyNimiqMessage(receipt.message, receipt.publicKey, receipt.signature)
+    : false;
   const next = await update(order.id, (o) => {
     const ok = o.kind === 'cashout' ? ['paid', 'payout_sent', 'disputed'] : ['paid', 'disputed'];
     if (!ok.includes(o.status)) throw new OrderError("This order can't be confirmed yet.");
@@ -560,13 +583,34 @@ export const ordersForWallet = async (wallet: string, limit = 20) => loadMany(aw
 export const ordersForAgent = async (agentId: string, limit = 60) => loadMany(await store.lrange(K.byAgent(agentId), 0, limit - 1));
 export const allOrders = async (limit = 1000) => loadMany(await store.lrange(K.all, 0, limit - 1));
 
-/** What any browser (or the agent, with reveal) may see. The order secret never leaves the server after creation. */
+/** "Ada Grace Obi" → "A. G. O.": enough for the customer to recognise, not enough to identify them. */
+const initials = (name: string) =>
+  name
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((w) => `${w[0].toUpperCase()}.`)
+    .join(' ');
+
+/**
+ * What a browser may see. `reveal` is for the order's own customer and its agent: the full bank details.
+ * Anyone else gets the account name as initials and the last 4 digits only.
+ * The order secret and pickup code never appear here (see ownerOrder).
+ */
 export function publicOrder(o: Order, reveal = false): Order {
   const rest: Order = { ...o };
   delete rest.secret;
+  delete rest.pickupCode;
   if (reveal || !rest.bank) return rest;
-  return { ...rest, bank: { ...rest.bank, accountNumber: `••••${rest.bank.accountNumber.slice(-4)}` } };
+  return { ...rest, bank: { ...rest.bank, accountNumber: `••••${rest.bank.accountNumber.slice(-4)}`, accountName: initials(rest.bank.accountName) } };
 }
+
+/** The customer's own view, on the phone that made the order: full details plus the pickup code. */
+export function ownerOrder(o: Order): Order {
+  return { ...publicOrder(o, true), pickupCode: o.pickupCode };
+}
+
+/** True only for the phone holding this order's secret. Old orders without a secret belong to nobody. */
+export const isOwner = (o: Order, token: string | null) => Boolean(o.secret) && ownsOrder(o, token);
 
 /** Only the order's creator holds its secret. Old orders made before secrets existed stay open. */
 export function ownsOrder(o: Order, token: string | null) {

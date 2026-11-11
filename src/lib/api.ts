@@ -36,12 +36,17 @@ export interface OrderView {
   order: Order;
   agent: PublicAgent | null;
   agentBank: { bankName: string; accountNumber: string; accountName: string } | null;
+  /** This phone made the order: it sees full details and the pickup code. */
+  mine?: boolean;
 }
+
+const tokenHeader = (id: string) => {
+  const token = orderToken(id);
+  return token ? { 'x-order-token': token } : undefined;
+};
 
 export const fetchQuote = () => api<Quote>('/api/rate');
 export const fetchAgents = (network: 'mainnet' | 'testnet' = 'mainnet') => api<{ agents: PublicAgent[] }>(`/api/agents?network=${network}`);
-export const fetchOrder = (id: string) => api<OrderView>(`/api/orders/${id}`);
-export const orderAction = (id: string, json: Record<string, unknown>) => {
-  const token = orderToken(id);
-  return api<OrderView>(`/api/orders/${id}`, { method: 'POST', json, headers: token ? { 'x-order-token': token } : undefined });
-};
+export const fetchOrder = (id: string) => api<OrderView>(`/api/orders/${id}`, { headers: tokenHeader(id) });
+export const orderAction = (id: string, json: Record<string, unknown>) =>
+  api<OrderView>(`/api/orders/${id}`, { method: 'POST', json, headers: tokenHeader(id) });

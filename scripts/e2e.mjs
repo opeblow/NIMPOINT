@@ -50,6 +50,7 @@ const send = async (from, to, nim, data, htlcOwner, rpc = RPC) =>
 const skip = (what, why) => console.log(`- skipped: ${what} (${why})`);
 
 const bank = { bankCode: '058', accountNumber: '0123456789', accountName: 'Ada Lovelace' };
+const BASE32 = '0123456789ABCDEFGHJKLMNPQRSTUVXY';
 
 // ── basics
 let r = await call('/api/rate');
@@ -98,9 +99,14 @@ if (BOND) {
 r = await call('/api/orders', { method: 'POST', json: { kind: 'cashout', mode: 'bank', agentId: 'yaba-1', wallet: USER1, ngn: 5000, bank } });
 check(r.status === 429, 'double-tap within 3s is blocked', r.body);
 
-r = await call(`/api/orders/${o1.id}`);
+r = await call(`/api/orders/${o1.id}`, { noToken: true });
 check(r.body.order.status === 'awaiting_payment', 'no payment yet → still awaiting');
 check(r.body.order.bank.accountNumber.startsWith('••••'), 'account number masked on public order view', r.body.order.bank);
+check(r.body.order.bank.accountName === 'A. L.' && r.body.mine === false, "customer's name is only initials on the public view", r.body.order.bank);
+r = await call(`/api/orders?wallet=${encodeURIComponent(USER1)}`);
+check(r.body.orders.every((o) => !o.bank || (o.bank.accountName === 'A. L.' && o.bank.accountNumber.startsWith('••••'))), 'wallet lookup hides names and account numbers', r.body.orders);
+r = await call(`/api/orders/${o1.id}`);
+check(r.body.mine === true && r.body.order.bank.accountName === 'Ada Lovelace', 'the customer sees their own full details', r.body.order.bank);
 
 // User pays from their Nimiq Pay HTLC; app reports a serialized tx (not a hash) → memo scan must find it.
 const h1 = await send(HTLC1, AGENT, o1.nim, o1.memo, USER1);
@@ -182,6 +188,39 @@ r = await call('/api/proof');
 check(r.body.ledger.uniqueWallets === 2, 'proof counts 2 unique wallets', r.body.ledger);
 check(r.body.ledger.orders === 3, 'proof counts 3 settled orders', r.body.ledger);
 check(r.body.chain.memoPayments === 2 && r.body.chain.uniqueSenders === 1, 'chain-only count matches (2 cash-out payments, 1 owner)', r.body.chain);
+
+// ── cash pickup needs a secret code: the order ID is public on-chain, so it must not release cash
+const PICKER = 'NQ99 PPPP PPPP PPPP PPPP PPPP PPPP PPPP PPPP';
+r = await call('/api/orders', { method: 'POST', json: { kind: 'cashout', mode: 'cash', agentId: 'yaba-1', wallet: PICKER, ngn: 1000 } });
+const oc = r.body.order;
+check(/^\d{6}$/.test(oc?.pickupCode ?? ''), 'cash pickup gets a 6-digit code for the customer', oc);
+check(!oc.memo.includes(oc.pickupCode), 'pickup code is not in the on-chain memo');
+await send(PICKER, AGENT, oc.nim, oc.memo);
+r = await call(`/api/orders/${oc.id}`, { noToken: true });
+check(r.body.order.status === 'paid' && r.body.order.pickupCode === undefined && r.body.mine === false, 'a stranger who knows the order ID does not see the pickup code', r.body.order);
+r = await call(`/api/orders/${oc.id}`);
+check(r.body.order.pickupCode === oc.pickupCode && r.body.mine === true, "the customer's phone still sees the pickup code", r.body.order);
+r = await call('/api/agent', { key: KEY });
+check(r.body.orders.every((o) => o.pickupCode === undefined), 'the agent console never shows pickup codes');
+r = await call('/api/agent', { method: 'POST', key: KEY, json: { action: 'payout_sent', id: oc.id } });
+check(r.status === 400 && /pickup code/.test(r.body.error), 'cash cannot be released without the code', r.body);
+const wrong = oc.pickupCode === '000000' ? '111111' : '000000';
+r = await call('/api/agent', { method: 'POST', key: KEY, json: { action: 'payout_sent', id: oc.id, code: wrong } });
+check(r.status === 400 && /doesn't match/.test(r.body.error), 'a wrong code is refused', r.body);
+r = await call('/api/agent', { method: 'POST', key: KEY, json: { action: 'payout_sent', id: oc.id, code: oc.id } });
+check(r.status === 400, 'the public order ID does not work as a pickup code', r.body);
+r = await call('/api/agent', { method: 'POST', key: KEY, json: { action: 'payout_sent', id: oc.id, code: `${oc.pickupCode.slice(0, 3)} ${oc.pickupCode.slice(3)}` } });
+check(r.body.order?.status === 'payout_sent', 'the right code releases the cash', r.body);
+// A receipt signed by some other wallet is kept but not marked verified.
+const stranger = registration();
+r = await call(`/api/orders/${oc.id}`, { method: 'POST', json: { action: 'confirm', receipt: { message: stranger.message, publicKey: stranger.publicKey, signature: stranger.signature } } });
+check(r.body.order?.status === 'completed' && r.body.order.receipt?.verified === false, "a receipt signed by another wallet is not marked verified", r.body.order?.receipt);
+
+// ── a body that isn't JSON gets a clear 400, not a 500
+{
+  const res = await fetch(APP + '/api/orders', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: 'not json' });
+  check(res.status === 400, 'malformed request body is a 400', res.status);
+}
 
 // ── telegram webhook is locked down
 r = await call('/api/telegram', { method: 'POST', json: {} });
@@ -297,7 +336,6 @@ if (ADMIN) {
 } else skip('dispute resolution', 'ADMIN_KEY not set');
 
 // ── registration: a wallet proves it is real by signing
-const BASE32 = '0123456789ABCDEFGHJKLMNPQRSTUVXY';
 function addressOf(pub) {
   const h = blake2b(pub, { dkLen: 32 }).subarray(0, 20);
   let bits = '';

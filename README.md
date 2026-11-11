@@ -15,7 +15,7 @@ Cash out NIM to any Nigerian bank, or walk up to a NimPoint agent and leave with
 ![Three.js](https://img.shields.io/badge/React%20Three%20Fiber-3D-12130f?logo=threedotjs)
 ![Nimiq Pay](https://img.shields.io/badge/Nimiq%20Pay-Mini%20App-e9b213)
 ![Category](https://img.shields.io/badge/Cycle%203-On%2FOff--Ramp-0d7a4a)
-![E2E](https://img.shields.io/badge/e2e-84%20API%20checks-0d7a4a)
+![E2E](https://img.shields.io/badge/e2e-98%20API%20checks-0d7a4a)
 
 [Live app](https://nimpoint.vercel.app) · [Live on-chain proof](https://nimpoint.vercel.app/proof) · [Demo video](docs/demo.mp4) · [Become a NimPoint](https://nimpoint.vercel.app/agent)
 
@@ -106,7 +106,7 @@ And against the published scoring:
 
 | Scored on | What NimPoint shows |
 | --- | --- |
-| Functionality, reliability and usefulness (45) | Both directions work end to end. 84 automated checks cover double payments, short payments, closed apps, retries, disputes and bonds. Built on a habit Nigerians already have: the POS agent. |
+| Functionality, reliability and usefulness (45) | Both directions work end to end. 98 automated checks cover double payments, short payments, closed apps, retries, disputes and bonds. Built on a habit Nigerians already have: the POS agent. |
 | Nimiq Pay and Nimiq integration (25) | Payments with data, balances, signed receipts, signed registration, HTLC resolution, host network and account-change events. NIM is the asset being traded and the collateral agents lock, not just a way to pay. |
 | Real usage (15) | A public [proof page](https://nimpoint.vercel.app/proof): every settled order with its transaction, wallets that traded, and wallets that registered with a signature. Test-network activity is shown apart and never counted. |
 | Design and UX (10) | A custom keypad, one decision per screen, plain-language errors, and a layout that fits a 360×640 Android phone. |
@@ -158,7 +158,7 @@ All screenshots were taken in an emulated phone viewport (390×844 @2x) against 
 | <img src="docs/screenshots/04-agent.png" width="240" /> | <img src="docs/screenshots/05-bank.png" width="240" /> | <img src="docs/screenshots/06-review.png" width="240" /> |
 | **Pick an agent.** Online status, rating, completed orders, typical payout time and the exact NIM you'd send. | **Bank details.** All Nigerian banks and fintechs (OPay, PalmPay, Moniepoint, Kuda…). Saved for next time on your device only. | **Review.** Everything on one card: amounts, rate, agent fee, destination. One tap opens Nimiq Pay. |
 | <img src="docs/screenshots/07-paid.png" width="240" /> | <img src="docs/screenshots/09-pickup.png" width="240" /> | <img src="docs/screenshots/08-done.png" width="240" /> |
-| **Verified on-chain.** Payment found by memo within seconds; the agent is alerted on Telegram. | **Cash pickup.** A large code to show the agent at the stand. | **Done.** Confirm receipt (optionally signed by your wallet) and rate the agent. |
+| **Verified on-chain.** Payment found by memo within seconds; the agent is alerted on Telegram. | **Cash pickup.** A secret 6-digit code, shown only on the customer's phone, that the agent types in before handing over cash. | **Done.** Confirm receipt (optionally signed by your wallet) and rate the agent. |
 | <img src="docs/screenshots/10-topup.png" width="240" /> | <img src="docs/screenshots/11-agent.png" width="240" /> | <img src="docs/screenshots/12-proof.png" width="240" /> |
 | **Top up.** Agent's account details with one-tap copy, and the exact reference to use. | **Agent console.** Online toggle, stats, to-do list and the printable NimPoint QR. | **Live proof.** Unique wallets, settled orders and every transaction, linked to the explorer. |
 
@@ -250,6 +250,8 @@ Real money moves through this app, so every edge case has a rule:
 | Customer gets the Naira but never confirms | The order closes by itself 24 hours after the agent marked it paid, unless the customer reports a problem. The agent's record and bond are freed. |
 | Customer lies about not being paid | NimPoint looks at the agent's proof of transfer and closes the report as "agent paid". |
 | Wallet is on the Nimiq test network | The order is checked against the test network, marked TEST in red for the agent ("do not send real Naira"), and kept out of the real proof numbers. |
+| Someone sees a cash order's ID on-chain and tries to collect the cash | The order ID is public (it is the memo), so it is not the pickup code. Each cash pickup has a separate 6-digit code that only the customer's phone is shown. The agent must type it in before handing over cash, and the Telegram button can't skip it. |
+| Someone looks up another person's order | Anyone else sees the account name as initials and the last 4 digits of the account number. Only the customer's own phone and the agent see full details. |
 | Someone tries to inflate the user count | Registration needs a signature from the wallet's own key. An address typed into a form is not enough. |
 
 ### Agent bonds
@@ -322,7 +324,7 @@ src/
 └─ components/                 UI kit, 3D coin, keypad, timeline, sheets
 scripts/
 ├─ mock-nimiq.mjs              Local Nimiq node stand-in for tests
-├─ e2e.mjs                     84 end-to-end API checks
+├─ e2e.mjs                     98 end-to-end API checks
 └─ count-users.mjs             Independent on-chain user count
 ```
 
@@ -441,7 +443,7 @@ When bonds are on, a new agent's first job is to post one: open the console, tap
 | Suite | What it covers | Command |
 | --- | --- | --- |
 | Lint + types | ESLint (Next config), `tsc --noEmit` strict | `npm run lint && npm run typecheck` |
-| End-to-end API (84 checks) | Validation, cash-out, top-up, memo scan, serialized tx, replay protection, wrong memo, short payment, disputes, ratings, agent auth, Telegram auth, offline agents, proof counts, idempotent creates, concurrent syncs, duplicate payments, send locks, **agent bonds** (no bond, wrong memo, capacity, release), **auto-complete**, **dispute resolution**, **signed registration** (forged and borrowed signatures refused) and **test-network separation** | `npm run test:e2e` (with mock node + app running; see [CONTRIBUTING](CONTRIBUTING.md)) |
+| End-to-end API (98 checks) | Validation, cash-out, top-up, memo scan, serialized tx, replay protection, wrong memo, short payment, disputes, ratings, agent auth, Telegram auth, offline agents, proof counts, idempotent creates, concurrent syncs, duplicate payments, send locks, **agent bonds** (no bond, wrong memo, capacity, release), **auto-complete**, **dispute resolution**, **signed registration** (forged and borrowed signatures refused) and **test-network separation**, **cash pickup codes** and **privacy of customer details** | `npm run test:e2e` (with mock node + app running; see [CONTRIBUTING](CONTRIBUTING.md)) |
 | In-browser run | Registration, a full cash-out and a full top-up clicked through in headless Chrome with an injected Nimiq Pay provider, on three phones at once (two customers and the agent). This run produced the demo video's screens. | Not in CI |
 | CI | Lint, typecheck, build and the full E2E suite on every push | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) |
 | CodeQL | Static security analysis weekly and on every PR | [`.github/workflows/codeql.yml`](.github/workflows/codeql.yml) |

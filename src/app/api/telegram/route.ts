@@ -1,5 +1,5 @@
 import { listAgents, sameSecret } from '@/lib/agents';
-import { getOrder, markPayoutSent } from '@/lib/orders';
+import { getOrder, markPayoutSent, pickupCodeRequired } from '@/lib/orders';
 import { ok } from '@/lib/http';
 import { telegram } from '@/lib/telegram';
 import { ngn } from '@/lib/format';
@@ -36,6 +36,9 @@ export async function POST(req: Request) {
     if (agent && order && order.agentId === agent.id && order.status !== 'paid') {
       // Telegram retries webhooks and agents double-tap: a repeat is not an error.
       reply = order.status === 'payout_sent' || order.status === 'completed' ? 'Already marked as paid.' : `Order is ${order.status.replace('_', ' ')}.`;
+    } else if (agent && order && order.agentId === agent.id && pickupCodeRequired(order)) {
+      // Older alerts may still carry the button: a cash pickup needs the customer's code.
+      reply = "Cash pickup: open the console and type in the customer's 6-digit code.";
     } else if (agent && order && order.agentId === agent.id) {
       try {
         await markPayoutSent(order, agent);

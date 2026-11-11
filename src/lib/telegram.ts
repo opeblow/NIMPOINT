@@ -47,10 +47,11 @@ export async function alertAgent(
     if (order.mode === 'bank' && order.bank) {
       lines.push('', `<b>${esc(order.bank.accountName)}</b>`, `${esc(order.bank.bankName)} · <code>${order.bank.accountNumber}</code>`);
     } else {
-      lines.push('', '🧍 Customer is collecting <b>cash in hand</b>. Check the code on their phone.');
+      lines.push('', '🧍 Customer is collecting <b>cash in hand</b>. Before you hand it over, type the 6-digit pickup code from their phone into the console.');
     }
     if (order.tx) lines.push('', `<a href="${EXPLORER_TX(order.tx.hash, order.network)}">View transaction</a>`);
-    keyboard = [[{ text: `✅ I've paid ${ngn(pay)}`, callback_data: `sent:${order.id}` }], ...keyboard];
+    // Cash pickups are released only in the console, with the customer's code.
+    if (order.mode === 'bank') keyboard = [[{ text: `✅ I've paid ${ngn(pay)}`, callback_data: `sent:${order.id}` }], ...keyboard];
   } else if (event === 'fiat_sent') {
     lines.push(`🪙 <b>Top-up ${ngn(order.ngn)}</b> · order <code>${order.id}</code>`);
     lines.push(`Customer says they ${order.mode === 'cash' ? 'handed you cash' : 'sent the Naira'}.`);

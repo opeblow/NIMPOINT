@@ -239,17 +239,31 @@ export function OrderScreen({ id }: { id: string }) {
           </Card>
         )}
 
-        {/* ── cash pickup code ── */}
-        {cash && ((order.kind === 'cashout' && ['paid', 'payout_sent'].includes(order.status)) || (order.kind === 'topup' && order.status === 'awaiting_fiat')) && (
+        {/* ── cash pickup code: a secret only this phone is shown (the order ID is public on-chain) ── */}
+        {cash && order.kind === 'cashout' && ['paid', 'payout_sent'].includes(order.status) &&
+          (order.pickupCode ? (
+            <Card className="overflow-hidden">
+              <div className="bg-ink px-5 py-6 text-center text-paper">
+                <p className="text-[13px] uppercase tracking-[0.12em] text-paper/60">Pickup code</p>
+                <p className="mt-2 font-mono text-[40px] font-semibold tracking-[0.12em]">
+                  {order.pickupCode.slice(0, 3)} {order.pickupCode.slice(3)}
+                </p>
+                <p className="mt-1 text-[14px] text-paper/70">
+                  Tell this code to {agentName} at the stand. They hand you {f.ngn(payout)}. Don&apos;t share it with anyone else.
+                </p>
+              </div>
+            </Card>
+          ) : (
+            <Notice>The pickup code only shows on the phone that placed this order. Open NimPoint there to collect your cash.</Notice>
+          ))}
+        {cash && order.kind === 'topup' && order.status === 'awaiting_fiat' && (
           <Card className="overflow-hidden">
             <div className="bg-ink px-5 py-6 text-center text-paper">
-              <p className="text-[13px] uppercase tracking-[0.12em] text-paper/60">{order.kind === 'cashout' ? 'Pickup code' : 'Show this code'}</p>
+              <p className="text-[13px] uppercase tracking-[0.12em] text-paper/60">Show this code</p>
               <p className="mt-2 font-mono text-[40px] font-semibold tracking-[0.12em]">
                 {order.id.slice(0, 4)} {order.id.slice(4)}
               </p>
-              <p className="mt-1 text-[14px] text-paper/70">
-                {order.kind === 'cashout' ? `Show this to ${agentName}. They hand you ${f.ngn(payout)}.` : `Hand ${f.ngn(order.ngn)} to ${agentName}.`}
-              </p>
+              <p className="mt-1 text-[14px] text-paper/70">Hand {f.ngn(order.ngn)} to {agentName}.</p>
             </div>
           </Card>
         )}

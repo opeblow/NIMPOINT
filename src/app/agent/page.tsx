@@ -278,6 +278,7 @@ function Line({ order: o }: { order: Order }) {
 
 function TodoCard({ order: o, agentKey: key, onChange }: { order: Order; agentKey: string; onChange: () => void }) {
   const [ref, setRef] = useState('');
+  const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const sentKey = `np:agent-sent:${o.id}`;
@@ -353,9 +354,20 @@ function TodoCard({ order: o, agentKey: key, onChange }: { order: Order; agentKe
               <CopyField label={o.bank.bankName} value={o.bank.accountName} mono={false} />
             </div>
           ) : (
-            <p className="mt-3 rounded-2xl bg-gold-soft p-3 text-[14px] text-gold-deep">
-              Cash pickup. Match the code on the customer&apos;s phone: <b className="font-mono">{o.id.slice(0, 4)} {o.id.slice(4)}</b>
-            </p>
+            <>
+              <p className="mt-3 rounded-2xl bg-gold-soft p-3 text-[14px] text-gold-deep">
+                Cash pickup. Ask for the 6-digit pickup code on the customer&apos;s NimPoint screen and tap Check code. If it is right, the order moves to In progress: hand over the cash. If not, don&apos;t pay.
+              </p>
+              <input
+                value={code}
+                onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                inputMode="numeric"
+                autoComplete="off"
+                placeholder="Pickup code"
+                aria-label="Customer's pickup code"
+                className="mt-3 h-12 w-full rounded-xl border border-line bg-card px-3 text-center font-mono text-[22px] tracking-[0.3em] outline-none focus:border-ink"
+              />
+            </>
           )}
           {o.mode === 'bank' && (
             <input
@@ -370,9 +382,12 @@ function TodoCard({ order: o, agentKey: key, onChange }: { order: Order; agentKe
             size="md"
             className="mt-3 w-full"
             loading={busy}
-            onClick={() => act(() => api('/api/agent', { method: 'POST', agentKey: key, json: { action: 'payout_sent', id: o.id, ref: ref || undefined } }))}
+            disabled={o.mode === 'cash' && code.length !== 6}
+            onClick={() =>
+              act(() => api('/api/agent', { method: 'POST', agentKey: key, json: { action: 'payout_sent', id: o.id, ref: ref || undefined, code: o.mode === 'cash' ? code : undefined } }))
+            }
           >
-            {o.mode === 'bank' ? `I've sent ${f.ngn(payout)}` : `I've handed over ${f.ngn(payout)}`}
+            {o.mode === 'bank' ? `I've sent ${f.ngn(payout)}` : `Check code for ${f.ngn(payout)}`}
           </Button>
         </div>
       ) : (

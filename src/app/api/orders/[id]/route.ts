@@ -4,7 +4,9 @@ import {
   confirmReceived,
   disputeOrder,
   getOrder,
+  isOwner,
   netOf,
+  ownerOrder,
   ownsOrder,
   markFiatSent,
   publicAgent,
@@ -20,21 +22,25 @@ export const dynamic = 'force-dynamic';
 
 type Ctx = { params: Promise<{ id: string }> };
 
-async function view(order: Order) {
+/** `mine`: the request came from the phone that made the order, so it may see the full details and the pickup code. */
+async function view(order: Order, mine: boolean) {
   const agent = getAgent(order.agentId);
   return {
-    order: publicOrder(order),
+    order: mine ? ownerOrder(order) : publicOrder(order),
+    mine,
     agent: agent ? await publicAgent(agent, netOf(order)) : null,
     // Top-up by bank: the user needs to know where to send Naira.
     agentBank: order.kind === 'topup' && order.mode === 'bank' ? agent?.bank ?? null : null,
   };
 }
 
-export async function GET(_req: Request, { params }: Ctx) {
+const token = (req: Request) => req.headers.get('x-order-token');
+
+export async function GET(req: Request, { params }: Ctx) {
   try {
     const order = await getOrder((await params).id);
     if (!order) return fail('Order not found.', 404);
-    return ok(await view(await syncOrder(order)));
+    return ok(await view(await syncOrder(order), isOwner(order, token(req))));
   } catch (err) {
     return handle(err);
   }
@@ -60,7 +66,7 @@ export async function POST(req: Request, { params }: Ctx) {
     if (!order) return fail('Order not found.', 404);
     const body = ActionSchema.parse(await req.json());
     // Anyone may report a payment or refresh (both are checked on-chain). Everything else is the creator's call.
-    if (body.action !== 'tx' && body.action !== 'sync' && !ownsOrder(order, req.headers.get('x-order-token'))) {
+    if (body.action !== 'tx' && body.action !== 'sync' && !ownsOrder(order, token(req))) {
       return fail('Only the person who created this order can do that.', 403);
     }
     let next: Order;
@@ -84,7 +90,7 @@ export async function POST(req: Request, { params }: Ctx) {
         next = await syncOrder(order, true);
         break;
     }
-    return ok(await view(next));
+    return ok(await view(next, isOwner(order, token(req))));
   } catch (err) {
     return handle(err);
   }
