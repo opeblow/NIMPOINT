@@ -34,7 +34,14 @@ export default function ProofPage() {
   }, [net]);
 
   const l = proof?.ledger;
-  const maxDay = Math.max(1, ...(l?.daily.map((d) => d.wallets) ?? [1]));
+  const regByDay = new Map<string, number>();
+  for (const u of proof?.registrations ?? []) {
+    const day = new Date(u.at).toISOString().slice(0, 10);
+    regByDay.set(day, (regByDay.get(day) ?? 0) + 1);
+  }
+  const regDays = [...regByDay.entries()].sort();
+  const maxReg = Math.max(1, ...regDays.map(([, n]) => n));
+  const maxDay =Math.max(1, ...(l?.daily.map((d) => d.wallets) ?? [1]));
 
   return (
     <div className="mx-auto min-h-[100dvh] w-full max-w-2xl px-4 pb-12 pt-[max(0.75rem,env(safe-area-inset-top))]">
@@ -128,6 +135,46 @@ export default function ProofPage() {
               </ul>
             </Card>
           )}
+
+          <Card className="mt-4 p-5">
+            <p className="text-[17px] font-semibold tracking-[-0.01em]">Registered users</p>
+            <p className="mt-1 text-[14px] leading-snug text-ink-2">
+              <b className="text-ink tabular">{proof.registeredUsers}</b> {proof.registeredUsers === 1 ? 'wallet has' : 'wallets have'} registered. Each one signed a fixed sentence with its own
+              Nimiq Pay key, so it cannot be typed in or made up. No payment is needed to register.
+            </p>
+            {regDays.length > 0 && (
+              <>
+                <p className="mt-4 text-[13px] font-medium uppercase tracking-[0.08em] text-ink-3">New registrations per day</p>
+                <div className="mt-3 flex h-28 items-end gap-1.5">
+                  {regDays.slice(-21).map(([day, n]) => (
+                    <div key={day} className="flex h-full flex-1 flex-col items-center justify-end gap-1">
+                      <span className="text-[11px] tabular text-ink-2">{n}</span>
+                      <div className="min-h-[3px] w-full rounded-t-md bg-gold" style={{ height: `${(n / maxReg) * 70}%` }} />
+                      <span className="text-[10px] tabular text-ink-3">{day.slice(5)}</span>
+                    </div>
+                  ))}
+                </div>
+                <ul className="mt-4 max-h-64 divide-y divide-line/70 overflow-y-auto text-[13px]">
+                  {[...(proof.registrations ?? [])].reverse().map((u) => (
+                    <li key={u.wallet} className="flex items-center justify-between gap-3 py-2">
+                      <span className="font-mono text-ink">{f.shortAddress(u.wallet)}</span>
+                      <span className="text-ink-3">{u.at ? new Date(u.at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : ''}</span>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+            <p className="mt-4 text-[13px] leading-snug text-ink-2">
+              Check it yourself:{' '}
+              <a href={`/api/users?list=1&network=${net}`} target="_blank" rel="noreferrer" className="font-medium text-ink underline underline-offset-2">
+                the full signed list
+              </a>{' '}
+              has every wallet with its public key and signature.
+            </p>
+            <pre className="no-scrollbar mt-3 overflow-x-auto rounded-2xl bg-ink p-4 font-mono text-[12px] leading-relaxed text-paper/90">
+              {`node scripts/verify-users.mjs${net === 'testnet' ? ' testnet' : ''}`}
+            </pre>
+          </Card>
 
           {l.daily.length > 0 && (
             <Card className="mt-4 p-5">

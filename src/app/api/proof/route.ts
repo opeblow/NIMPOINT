@@ -6,7 +6,7 @@ import { ownerOf, sameAddress, transactionHistory } from '@/lib/nimiq-rpc';
 import { agentBond, allOrders, healNetwork, netOf } from '@/lib/orders';
 import { store } from '@/lib/store';
 import type { Proof } from '@/lib/types';
-import { registeredCount } from '@/lib/users';
+import { listUsers } from '@/lib/users';
 
 export const dynamic = 'force-dynamic';
 
@@ -63,10 +63,12 @@ export async function GET(req: Request) {
       byDay.set(day, d);
     }
 
+    const users = await listUsers(net);
     const proof: Proof = {
       generatedAt: Date.now(),
       network: net,
-      registeredUsers: await registeredCount(net),
+      registeredUsers: users.length,
+      registrations: users.map((u) => ({ wallet: u.wallet, at: u.at })),
       otherNetworkOrders: everything.length - orders.length,
       bonds: await bonds(net),
       bondNetwork: bondConfig()?.network ?? null,

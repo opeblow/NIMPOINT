@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { asNetwork } from '@/lib/config';
 import { fail, handle, ok } from '@/lib/http';
 import { store } from '@/lib/store';
-import { isRegistered, registeredCount, registerUser, RegistrationError } from '@/lib/users';
+import { isRegistered, listUsers, registeredCount, registerUser, RegistrationError } from '@/lib/users';
 
 export const dynamic = 'force-dynamic';
 
@@ -25,6 +25,11 @@ export async function GET(req: Request) {
     const q = new URL(req.url).searchParams;
     const net = asNetwork(q.get('network'));
     const wallet = q.get('wallet');
+    // The public, signed list: every registered wallet with the signature that proves it. See scripts/verify-users.mjs.
+    if (q.get('list')) {
+      const users = await listUsers(net);
+      return ok({ network: net, count: users.length, users });
+    }
     return ok({ registered: wallet ? await isRegistered(nimiqAddress.parse(wallet), net) : false, count: await registeredCount(net) });
   } catch (err) {
     return handle(err);

@@ -20,10 +20,41 @@ export async function registerUser(input: { wallet: string; network: Network; me
   if (input.message !== registrationMessage(input.wallet)) throw new RegistrationError('That registration message is not the one NimPoint asked for.');
   if (addressFromPublicKey(input.publicKey) !== normalizeAddress(input.wallet)) throw new RegistrationError('That signature is from a different wallet.');
   if (!verifyNimiqMessage(input.message, input.publicKey, input.signature)) throw new RegistrationError('The signature did not check out. Please try again.');
-  if (await store.setNx(K.user(input.network, input.wallet), String(Date.now()), TTL)) {
+  if (await store.setNx(K.user(input.network, input.wallet), JSON.stringify({ at: Date.now(), publicKey: input.publicKey.toLowerCase(), signature: input.signature.toLowerCase() }), TTL)) {
     await store.sadd(K.all(input.network), normalizeAddress(input.wallet));
   }
 }
 
-export const isRegistered = async (wallet: string, net: Network) => (await store.get<string>(K.user(net, wallet))) !== null;
+export const isRegistered = async (wallet: string, net: Network) => (await store.get<unknown>(K.user(net, wallet))) !== null;
+
+export interface RegisteredUser {
+  wallet: string;
+  /** When the wallet registered (ms). */
+  at: number;
+  /** The exact sentence the wallet signed. */
+  message: string;
+  /** Kept for every registration made since proofs are stored, so anyone can re-check the signature. */
+  publicKey?: string;
+  signature?: string;
+}
+
+/** Every registered wallet with its signed proof, oldest first. Public by design: it is what makes the count checkable. */
+export async function listUsers(net: Network): Promise<RegisteredUser[]> {
+  const wallets = await store.smembers(K.all(net));
+  const rows = await Promise.all(
+    wallets.map(async (wallet) => {
+      let v = await store.get<unknown>(K.user(net, wallet));
+      if (typeof v === 'string') {
+        try {
+          v = JSON.parse(v);
+        } catch {
+          /* an old record: just a timestamp */
+        }
+      }
+      const rec = v && typeof v === 'object' ? (v as { at?: number; publicKey?: string; signature?: string }) : { at: Number(v) || 0 };
+      return { wallet, at: rec.at ?? 0, message: registrationMessage(wallet), publicKey: rec.publicKey, signature: rec.signature };
+    }),
+  );
+  return rows.sort((a, b) => a.at - b.at);
+}
 export const registeredCount = async (net: Network) => (await store.smembers(K.all(net))).length;

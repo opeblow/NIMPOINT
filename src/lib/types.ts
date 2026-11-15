@@ -156,6 +156,8 @@ export interface Proof {
   network: Network;
   /** Wallets that proved ownership with a signature. */
   registeredUsers: number;
+  /** Each registered wallet and when it registered, oldest first. */
+  registrations: { wallet: string; at: number }[];
   /** Settled orders on the other network, so the page can point to them. */
   otherNetworkOrders: number;
   bonds: { agent: string; address: string; memo: string; nim: number; ngn: number }[];
