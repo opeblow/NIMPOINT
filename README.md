@@ -17,7 +17,7 @@ Cash out NIM to any Nigerian bank, or walk up to a NimPoint agent and leave with
 ![Category](https://img.shields.io/badge/Cycle%203-On%2FOff--Ramp-0d7a4a)
 ![E2E](https://img.shields.io/badge/e2e-98%20API%20checks-0d7a4a)
 
-[Live app](https://nimpoint.vercel.app) · [Live on-chain proof](https://nimpoint.vercel.app/proof) · [Demo video](docs/demo.mp4) · [Become a NimPoint](https://nimpoint.vercel.app/agent)
+[Live app](https://nimpoint.vercel.app) · [Live registered-user count + proof](https://nimpoint.vercel.app/proof) · [Demo video](docs/demo.mp4) · [Become a NimPoint](https://nimpoint.vercel.app/agent)
 
 </div>
 
@@ -108,7 +108,7 @@ And against the published scoring:
 | --- | --- |
 | Functionality, reliability and usefulness (45) | Both directions work end to end. 98 automated checks cover double payments, short payments, closed apps, retries, disputes and bonds. Built on a habit Nigerians already have: the POS agent. |
 | Nimiq Pay and Nimiq integration (25) | Payments with data, balances, signed receipts, signed registration, HTLC resolution, host network and account-change events. NIM is the asset being traded and the collateral agents lock, not just a way to pay. |
-| Real usage (15) | A public [proof page](https://nimpoint.vercel.app/proof): every settled order with its transaction, wallets that traded, and wallets that registered with a signature. Test-network activity is shown apart and never counted. |
+| Real usage (15) | A public [proof page](https://nimpoint.vercel.app/proof): the live count of unique wallets registered with a signature across both networks, plus settled orders and transactions. Order/payment activity stays separated by network; the shared registration count does not imply mainnet payments. |
 | Design and UX (10) | A custom keypad, one decision per screen, plain-language errors, and a layout that fits a 360×640 Android phone. |
 
 ## Demo video
@@ -208,13 +208,15 @@ NimPoint uses the official [`@nimiq/mini-app-sdk`](https://www.npmjs.com/package
 
 ## Verifiable usage: the proof page
 
-Real usage should be checkable, not claimed. `/proof` shows two independent counts:
+Real usage should be checkable, not claimed. **[Judges: see the live registered-user count and public proof](https://nimpoint.vercel.app/proof).** The registration total counts unique wallets across mainnet and testnet and appears in either network view; it is not evidence of a mainnet payment.
 
-0. **Registered users:** wallets that tapped "Register" and signed a fixed sentence with their Nimiq Pay key. The server checks the signature and that the key hashes to that address, so each one is a wallet somebody really holds.
-1. **Ledger:** unique wallets, settled orders, Naira moved and average rating, plus a per-day chart and **every settled order with its transaction link** on [nimiq.watch](https://nimiq.watch).
-2. **Chain-only:** the server scans each agent's address for incoming payments whose memo matches `^NIMPOINT-[2-9A-HJKMNP-Z]{8}$`, resolves each Nimiq Pay HTLC back to the owner wallet, and counts distinct owners.
+The page shows three independently checkable signals:
 
-The page has two tabs. **Real money (mainnet)** is the default and the only one that counts. **Test network** lists orders made from test-network wallets, which are labelled as tests everywhere and never added to the real numbers.
+1. **Registered users:** wallets that tapped "Register" and signed a fixed sentence with their Nimiq Pay key. The server checks the signature and that the key hashes to that address, so each one is a wallet somebody really holds.
+2. **Ledger:** unique wallets, settled orders, Naira moved and average rating, plus a per-day chart and **every settled order with its transaction link** on [nimiq.watch](https://nimiq.watch).
+3. **Chain-only:** the server scans each agent's address for incoming payments whose memo matches `^NIMPOINT-[2-9A-HJKMNP-Z]{8}$`, resolves each Nimiq Pay HTLC back to the owner wallet, and counts distinct owners.
+
+The page has two tabs. The **registration total** is global across both networks and deduplicated by wallet. Ledger and chain activity are scoped to the selected network: **Real money (mainnet)** is the default, while **Test network** lists testnet orders and payments separately, never as mainnet activity.
 
 Anyone, including the Nimiq team, can rerun the chain count without trusting our server:
 
