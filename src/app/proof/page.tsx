@@ -4,33 +4,50 @@ import { motion } from 'motion/react';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
-import { EXPLORER_ADDRESS, EXPLORER_TX, MEMO_PREFIX } from '@/lib/config';
+import { EXPLORER_ADDRESS, EXPLORER_TX, MEMO_PREFIX, type Network } from '@/lib/config';
 import * as f from '@/lib/format';
 import type { Proof } from '@/lib/types';
-import { Card, Spinner, Wordmark } from '@/components/ui';
+import { Card, Notice, Spinner, Wordmark } from '@/components/ui';
 
 export default function ProofPage() {
   const [proof, setProof] = useState<Proof | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [net, setNet] = useState<Network>('mainnet');
 
   useEffect(() => {
-    const load = () =>
-      api<Proof>('/api/proof')
-        .then((p) => (setProof(p), setErr(null)))
-        .catch((e: Error) => setErr(e.message));
-    void load();
-    const t = setInterval(load, 30_000);
-    return () => clearInterval(t);
+    if (new URLSearchParams(window.location.search).get('network') === 'testnet') setNet('testnet');
   }, []);
 
+  useEffect(() => {
+    let alive = true;
+    setProof(null);
+    const load = () =>
+      api<Proof>(`/api/proof?network=${net}`)
+        .then((p) => alive && (setProof(p), setErr(null)))
+        .catch((e: Error) => alive && setErr(e.message));
+    void load();
+    const t = setInterval(load, 30_000);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, [net]);
+
   const l = proof?.ledger;
-  const maxDay = Math.max(1, ...(l?.daily.map((d) => d.wallets) ?? [1]));
+  const regByDay = new Map<string, number>();
+  for (const u of proof?.registrations ?? []) {
+    const day = new Date(u.at).toISOString().slice(0, 10);
+    regByDay.set(day, (regByDay.get(day) ?? 0) + 1);
+  }
+  const regDays = [...regByDay.entries()].sort();
+  const maxReg = Math.max(1, ...regDays.map(([, n]) => n));
+  const maxDay =Math.max(1, ...(l?.daily.map((d) => d.wallets) ?? [1]));
 
   return (
     <div className="mx-auto min-h-[100dvh] w-full max-w-2xl px-4 pb-12 pt-[max(0.75rem,env(safe-area-inset-top))]">
       <header className="flex h-12 items-center justify-between">
         <Wordmark />
-        <Link href="/" className="text-[14px] font-medium text-ink-2">
+        <Link href="/app" className="text-[14px] font-medium text-ink-2">
           Open app
         </Link>
       </header>
@@ -43,6 +60,19 @@ export default function ProofPage() {
         transactions. Click any one to check it on the explorer.
       </p>
 
+      <div className="mt-5 inline-flex rounded-full bg-paper-2 p-1 text-[13px] font-medium" role="tablist" aria-label="Network">
+        {(['mainnet', 'testnet'] as const).map((n) => (
+          <button key={n} role="tab" aria-selected={net === n} onClick={() => setNet(n)} className={`rounded-full px-4 py-1.5 transition-colors ${net === n ? 'bg-ink text-paper' : 'text-ink-2'}`}>
+            {n === 'mainnet' ? 'Real money (mainnet)' : 'Test network'}
+          </button>
+        ))}
+      </div>
+      {net === 'testnet' && (
+        <div className="mt-3">
+          <Notice tone="warn">These are test-network orders. Test NIM has no value, so nothing here counts as real usage.</Notice>
+        </div>
+      )}
+
       {err && !proof && <p className="mt-8 text-danger">{err}</p>}
       {!proof && !err && (
         <div className="mt-16 flex justify-center text-ink-3">
@@ -52,12 +82,99 @@ export default function ProofPage() {
 
       {proof && l && (
         <>
-          <div className="mt-8 grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <Big label="Unique wallets" value={String(l.uniqueWallets)} accent />
+          <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3">
+            <Big label="Wallets that traded" value={String(l.uniqueWallets)} accent />
+            <Big label="Registered users" value={String(proof.registeredUsers)} />
             <Big label="Settled orders" value={String(l.orders)} />
             <Big label="Naira moved" value={f.ngn(l.volumeNgn)} />
             <Big label="Avg rating" value={l.ratingAvg ? `${l.ratingAvg.toFixed(1)} ★` : '—'} />
+            <Big
+              label="Agent bonds"
+              value={proof.bonds.length ? f.ngn(proof.bonds.reduce((s, b) => s + b.ngn, 0)) : proof.bondNetwork && proof.bondNetwork !== net ? 'Testnet' : 'Off'}
+            />
           </div>
+          <p className="mt-2 px-1 text-[12px] leading-snug text-ink-3">
+            A registered user is a wallet that signed a message to prove it exists. A wallet that traded has a payment on the Nimiq blockchain.
+          </p>
+          {l.teamOrders > 0 && (
+            <p className="mt-1 px-1 text-[12px] leading-snug text-ink-3">
+              {l.teamOrders} of these {l.orders} orders were paid by the NimPoint team&apos;s own wallets to test the live flow. They are real transactions, marked “team” below.
+            </p>
+          )}
+          {proof.bondNetwork && proof.bondNetwork !== net && (
+            <div className="mt-3">
+              <Notice tone="warn">
+                Agent bonds currently run on the {proof.bondNetwork === 'testnet' ? 'test network' : 'mainnet'}, so they do not gate these orders yet. They switch over once a funded bond
+                wallet is set for this network.
+              </Notice>
+            </div>
+          )}
+          {proof.otherNetworkOrders > 0 && (
+            <button onClick={() => setNet(net === 'mainnet' ? 'testnet' : 'mainnet')} className="mt-2 px-1 text-[13px] text-ink-2 underline underline-offset-2">
+              {net === 'mainnet' ? `${proof.otherNetworkOrders} more on the test network (not counted here)` : `${proof.otherNetworkOrders} real orders on mainnet`}
+            </button>
+          )}
+
+          {proof.bonds.length > 0 && (
+            <Card className="mt-4 p-5">
+              <p className="text-[17px] font-semibold tracking-[-0.01em]">Agent bonds</p>
+              <p className="mt-1 text-[14px] leading-snug text-ink-2">
+                Each agent locks NIM in a public bond wallet before taking orders. It caps what they can owe customers at once, and a customer who is not paid is refunded from it.
+              </p>
+              <ul className="mt-3 space-y-2 text-[13px]">
+                {proof.bonds.map((b) => (
+                  <li key={b.memo} className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-ink-2">
+                      {b.agent} · <b className="text-ink tabular">{f.nim(b.nim)}</b> ({f.ngn(b.ngn)})
+                    </span>
+                    <a href={EXPLORER_ADDRESS(b.address, net)} target="_blank" rel="noreferrer" className="font-mono text-ink underline underline-offset-2">
+                      {b.memo} ↗
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </Card>
+          )}
+
+          <Card className="mt-4 p-5">
+            <p className="text-[17px] font-semibold tracking-[-0.01em]">Registered users</p>
+            <p className="mt-1 text-[14px] leading-snug text-ink-2">
+              <b className="text-ink tabular">{proof.registeredUsers}</b> {proof.registeredUsers === 1 ? 'wallet has' : 'wallets have'} registered. Each one signed a fixed sentence with its own
+              Nimiq Pay key, so it cannot be typed in or made up. No payment is needed to register.
+            </p>
+            {regDays.length > 0 && (
+              <>
+                <p className="mt-4 text-[13px] font-medium uppercase tracking-[0.08em] text-ink-3">New registrations per day</p>
+                <div className="mt-3 flex h-28 items-end gap-1.5">
+                  {regDays.slice(-21).map(([day, n]) => (
+                    <div key={day} className="flex h-full flex-1 flex-col items-center justify-end gap-1">
+                      <span className="text-[11px] tabular text-ink-2">{n}</span>
+                      <div className="min-h-[3px] w-full rounded-t-md bg-gold" style={{ height: `${(n / maxReg) * 70}%` }} />
+                      <span className="text-[10px] tabular text-ink-3">{day.slice(5)}</span>
+                    </div>
+                  ))}
+                </div>
+                <ul className="mt-4 max-h-64 divide-y divide-line/70 overflow-y-auto text-[13px]">
+                  {[...(proof.registrations ?? [])].reverse().map((u) => (
+                    <li key={u.wallet} className="flex items-center justify-between gap-3 py-2">
+                      <span className="font-mono text-ink">{f.shortAddress(u.wallet)}</span>
+                      <span className="text-ink-3">{u.at ? new Date(u.at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : ''}</span>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+            <p className="mt-4 text-[13px] leading-snug text-ink-2">
+              Check it yourself:{' '}
+              <a href={`/api/users?list=1&network=${net}`} target="_blank" rel="noreferrer" className="font-medium text-ink underline underline-offset-2">
+                the full signed list
+              </a>{' '}
+              has every wallet with its public key and signature.
+            </p>
+            <pre className="no-scrollbar mt-3 overflow-x-auto rounded-2xl bg-ink p-4 font-mono text-[12px] leading-relaxed text-paper/90">
+              {`node scripts/verify-users.mjs${net === 'testnet' ? ' testnet' : ''}`}
+            </pre>
+          </Card>
 
           {l.daily.length > 0 && (
             <Card className="mt-4 p-5">
@@ -90,7 +207,7 @@ export default function ProofPage() {
               {proof.chain.agents.map((a) => (
                 <li key={a.address} className="flex flex-wrap items-center justify-between gap-2">
                   <span className="text-ink-2">{a.name}</span>
-                  <a href={EXPLORER_ADDRESS(a.address)} target="_blank" rel="noreferrer" className="font-mono text-ink underline underline-offset-2">
+                  <a href={EXPLORER_ADDRESS(a.address, net)} target="_blank" rel="noreferrer" className="font-mono text-ink underline underline-offset-2">
                     {a.address}
                   </a>
                 </li>
@@ -112,12 +229,13 @@ export default function ProofPage() {
                     <div className="min-w-0">
                       <p className="font-medium">
                         {e.kind === 'cashout' ? 'Cash out' : 'Top up'} · {f.ngn(e.ngn)} <span className="text-ink-3">· {f.nim(e.nim)}</span>
+                        {e.team && <span className="ml-2 rounded-full bg-paper-2 px-2 py-0.5 text-[11px] font-medium text-ink-2">team</span>}
                       </p>
                       <p className="truncate font-mono text-[12px] text-ink-3">
                         {f.shortAddress(e.wallet)} · {new Date(e.at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}
                       </p>
                     </div>
-                    <a href={EXPLORER_TX(e.tx)} target="_blank" rel="noreferrer" className="shrink-0 rounded-full bg-paper-2 px-3 py-1 font-mono text-[12px] text-ink">
+                    <a href={EXPLORER_TX(e.tx, net)} target="_blank" rel="noreferrer" className="shrink-0 rounded-full bg-paper-2 px-3 py-1 font-mono text-[12px] text-ink">
                       {e.tx.slice(0, 6)}↗
                     </a>
                   </li>

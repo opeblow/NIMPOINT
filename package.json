@@ -14,14 +14,15 @@
   },
   "dependencies": {
     "@nimiq/mini-app-sdk": "^0.2.5",
+    "@noble/hashes": "^1.8.0",
     "@react-three/drei": "^10.7.9",
     "@react-three/fiber": "^9.8.2",
     "@upstash/redis": "^1.41.0",
     "motion": "^14.11.1",
-    "next": "15.5.29",
+    "next": "16.4.5",
     "qrcode.react": "^4.2.0",
-    "react": "19.1.0",
-    "react-dom": "19.1.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
     "server-only": "^0.0.1",
     "three": "^0.187.0",
     "zod": "^4.6.7"

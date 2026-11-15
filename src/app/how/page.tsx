@@ -17,7 +17,7 @@ export default function How() {
     <div className="mx-auto min-h-[100dvh] w-full max-w-md px-4 pb-12 pt-[max(0.75rem,env(safe-area-inset-top))]">
       <header className="flex h-12 items-center justify-between">
         <Wordmark />
-        <Link href="/" className="text-[14px] font-medium text-ink-2">
+        <Link href="/app" className="text-[14px] font-medium text-ink-2">
           Open app
         </Link>
       </header>
@@ -62,7 +62,15 @@ export default function How() {
           We store only what an order needs: your wallet address, amount and, for bank payouts, the account you enter. Account numbers are shown only to the agent
           paying you. Payments are public on the Nimiq blockchain by design.
         </p>
-        <p>If something goes wrong, report it from the order page. The agent is alerted immediately and your payment stays on record on-chain.</p>
+        <p>
+          Agents can be asked to lock a bond: NIM they deposit in a public NimPoint bond wallet before taking orders. It limits how much an agent can owe customers at
+          one time. If you pay for a cash-out and are not paid, NimPoint can refund you from that agent&apos;s bond. Bonds are the only funds NimPoint holds, and they
+          belong to the agents.
+        </p>
+        <p>
+          If something goes wrong, report it from the order page within 24 hours. The agent is alerted immediately and your payment stays on record on-chain. An order
+          that is neither confirmed nor reported for 24 hours after the agent pays closes by itself.
+        </p>
       </section>
     </div>
   );

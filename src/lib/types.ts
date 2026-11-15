@@ -1,3 +1,5 @@
+import type { Network } from './config';
+
 export type OrderKind = 'cashout' | 'topup';
 export type PayoutMode = 'bank' | 'cash';
 
@@ -64,6 +66,27 @@ export interface Order {
   comment?: string;
   events: OrderEvent[];
   lastSyncAt?: number;
+  /** Version for safe concurrent saves. Bumped on every save. */
+  v?: number;
+  /** More payments that carried this order's memo after it was already paid. Someone owes a refund. */
+  extraPayments?: OnchainTx[];
+  /** Top-up: when the agent opened Nimiq Pay to send NIM. Blocks a second send. */
+  sendStartedAt?: number;
+  /** Which Nimiq network this order is on. Missing on old orders, which were mainnet. */
+  network?: Network;
+  /** Set when nobody confirmed or reported a problem in time and the order closed by itself. */
+  autoCompleted?: boolean;
+  /** How NimPoint closed a reported order: the agent had paid, or the customer was refunded from the bond. */
+  resolution?: 'agent_paid' | 'refunded';
+  /** The on-chain refund paid from the agent's bond, when the order was closed as refunded. */
+  refundTx?: OnchainTx;
+  /** Given only to the order's creator. Needed to confirm, rate or dispute. Never shown publicly. */
+  secret?: string;
+  /**
+   * Cash pickup: 6 digits only the customer's phone is shown. The agent types it in before handing over cash.
+   * Never on-chain, never in public views, never shown to the agent.
+   */
+  pickupCode?: string;
 }
 
 export interface PublicAgent {
@@ -79,6 +102,23 @@ export interface PublicAgent {
   telegram?: string;
   online: boolean;
   stats: AgentStats;
+  /** The agent's deposit. Null when bonds are switched off, or for the other network. */
+  bond: Bond | null;
+}
+
+export interface Bond {
+  /** Bond wallet: every deposit into it is public. */
+  address: string;
+  /** Memo the agent uses when adding to the bond. */
+  memo: string;
+  network: Network;
+  nim: number;
+  /** Value of the bond in Naira right now. */
+  ngn: number;
+  /** Naira the agent owes on cash-outs that are paid on-chain but not finished. */
+  exposureNgn: number;
+  /** Largest cash-out the agent can take now. */
+  availableNgn: number;
 }
 
 export interface AgentStats {
@@ -107,13 +147,27 @@ export interface ProofEntry {
   at: number;
   tx: string;
   rating?: number;
+  /** Paid by a wallet the team listed in TEAM_WALLETS: a real order, but our own test. */
+  team?: boolean;
 }
 
 export interface Proof {
   generatedAt: number;
+  network: Network;
+  /** Wallets that proved ownership with a signature. */
+  registeredUsers: number;
+  /** Each registered wallet and when it registered, oldest first. */
+  registrations: { wallet: string; at: number }[];
+  /** Settled orders on the other network, so the page can point to them. */
+  otherNetworkOrders: number;
+  bonds: { agent: string; address: string; memo: string; nim: number; ngn: number }[];
+  /** Network the bond wallet runs on, or null when bonds are off. Bonds only gate orders on that network. */
+  bondNetwork: Network | null;
   ledger: {
     uniqueWallets: number;
     orders: number;
+    /** Orders paid by the team's own wallets (TEAM_WALLETS). Included in `orders`, labelled on the page. */
+    teamOrders: number;
     completed: number;
     volumeNgn: number;
     volumeNim: number;

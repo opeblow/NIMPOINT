@@ -3,19 +3,29 @@
 import { motion } from 'motion/react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, ApiError, fetchAgents, fetchQuote } from '@/lib/api';
 import { BANKS } from '@/lib/banks';
 import { LIMITS } from '@/lib/config';
 import * as f from '@/lib/format';
-import { acceptTerms, forgetAccount, lastAgent, rememberAccount, rememberAgent, savedAccounts, termsAccepted, type SavedAccount } from '@/lib/local';
-import { useWallet } from '@/lib/nimiq-client';
+import { acceptTerms, forgetAccount, lastAgent, rememberAccount, rememberAgent, rememberOrderToken, savedAccounts, termsAccepted, type SavedAccount } from '@/lib/local';
+import { hostNetwork, useWallet } from '@/lib/nimiq-client';
 import type { Order, OrderKind, PayoutMode, PublicAgent, Quote } from '@/lib/types';
 import CoinStage from './CoinStage';
 import { applyKey, Keypad } from './Keypad';
 import { OpenInNimiqPay } from './OpenInNimiqPay';
 import { RecentOrders } from './RecentOrders';
+import { RegisterCard } from './RegisterCard';
 import { Button, Card, cx, Notice, RollingNumber, Segmented, Stars, Wordmark } from './ui';
+
+function newIdempotencyKey() {
+  try {
+    return crypto.randomUUID();
+  } catch {
+    // Older webviews without randomUUID.
+    return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+  }
+}
 
 type Step = 'amount' | 'method' | 'agent' | 'bank' | 'review';
 
@@ -46,6 +56,7 @@ export function Flow() {
   const [agreed, setAgreed] = useState(false);
   const [termsSeen, setTermsSeen] = useState(true);
   const [creating, setCreating] = useState(false);
+  const idem = useRef<{ sig: string; key: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   /* live data */
@@ -57,7 +68,7 @@ export function Flow() {
         .catch((e: Error) => alive && setQuoteError(e.message));
     void load();
     const t = setInterval(load, 30_000);
-    fetchAgents()
+    fetchAgents(hostNetwork())
       .then((r) => alive && setAgents(r.agents))
       .catch(() => alive && setAgents([]));
     return () => {
@@ -129,17 +140,23 @@ export function Flow() {
     setError(null);
     try {
       acceptTerms();
+      const body = {
+        kind,
+        mode,
+        agentId: agent.id,
+        wallet: wallet.address,
+        ngn: ngnValue,
+        bank: kind === 'cashout' && mode === 'bank' ? bank : undefined,
+        network: wallet.network,
+      };
+      // Same order details → same key, so a retry on a slow network returns the same order.
+      const sig = JSON.stringify(body);
+      if (idem.current?.sig !== sig) idem.current = { sig, key: newIdempotencyKey() };
       const { order } = await api<{ order: Order }>('/api/orders', {
         method: 'POST',
-        json: {
-          kind,
-          mode,
-          agentId: agent.id,
-          wallet: wallet.address,
-          ngn: ngnValue,
-          bank: kind === 'cashout' && mode === 'bank' ? bank : undefined,
-        },
+        json: { ...body, idempotencyKey: idem.current.key },
       });
+      if (order.secret) rememberOrderToken(order.id, order.secret);
       rememberAgent(agent.id);
       if (kind === 'cashout' && mode === 'bank') {
         const bankName = BANKS.find((b) => b.code === bank.bankCode)?.name ?? 'Bank';
@@ -234,6 +251,10 @@ export function Flow() {
                 </div>
               </section>
 
+              {wallet.network === 'testnet' && (
+                <p className="mt-3 rounded-2xl bg-gold-soft px-3 py-2 text-center text-[13px] font-medium text-gold-deep">Test network. This NIM has no real value.</p>
+              )}
+
               <div className="mt-4">
                 <Segmented
                   id="kind"
@@ -296,6 +317,7 @@ export function Flow() {
                 Continue
               </Button>
 
+              <RegisterCard wallet={wallet.address} network={wallet.network} />
               <RecentOrders wallet={wallet.address} />
 
               <footer className="mt-6 flex items-center justify-center gap-4 pb-2 text-[13px] text-ink-3">
@@ -387,7 +409,10 @@ export function Flow() {
                 .map((a) => {
                   const aRate = quote ? rateFor(quote.mid, kind, kind === 'cashout' ? a.cashoutSpreadBps : a.topupSpreadBps) : null;
                   const tooBig = ngnValue > a.maxNgn;
-                  const disabled = !a.online || tooBig;
+                  // With bonds on, an agent takes no order without one, and no cash-out bigger than what is free.
+                  const noBond = !!a.bond && a.bond.nim <= 0;
+                  const overBond = !!a.bond && !noBond && kind === 'cashout' && ngnValue > a.bond.availableNgn;
+                  const disabled = !a.online || tooBig || noBond || overBond;
                   return (
                     <motion.button
                       key={a.id}
@@ -430,10 +455,26 @@ export function Flow() {
                         <Stat label="Completed">{a.stats.completed}</Stat>
                         <Stat label="Typical payout">{a.stats.medianPayoutMins !== null ? `${Math.max(1, Math.round(a.stats.medianPayoutMins))} min` : '—'}</Stat>
                       </div>
+                      {a.bond && (
+                        <p className="mt-3 flex items-center gap-1.5 text-[13px] text-ink-2">
+                          <Shield />
+                          {noBond ? (
+                            'No bond posted yet'
+                          ) : (
+                            <span>
+                              Bond <b className="text-ink tabular">{f.ngn(a.bond.ngn)}</b> on-chain{kind === 'cashout' ? ' · protects your cash-out' : ''}
+                            </span>
+                          )}
+                        </p>
+                      )}
                       {aRate && ngnValue > 0 && (
                         <p className="mt-3 rounded-2xl bg-paper-2 px-3 py-2 text-[14px] tabular text-ink-2">
                           {tooBig ? (
                             `Up to ${f.ngn(a.maxNgn)} per order`
+                          ) : noBond ? (
+                            'Cannot take orders until it posts a bond'
+                          ) : overBond ? (
+                            `Can take up to ${f.ngn(a.bond!.availableNgn)} right now`
                           ) : (
                             <>
                               {kind === 'cashout' ? 'You send' : 'You get'} <b className="text-ink">{f.nim(nimFor(ngnValue, aRate, kind))}</b> · {f.rate(aRate)}/NIM
@@ -560,6 +601,11 @@ export function Flow() {
                   <ul className="mt-4 space-y-2 px-1 text-[13px] leading-snug text-ink-2">
                     <Li>Your NIM goes wallet-to-wallet to {agent.name}. NimPoint never holds your money.</Li>
                     <Li>The payment is verified on the Nimiq blockchain before the agent pays out.</Li>
+                    {agent.bond && agent.bond.nim > 0 && kind === 'cashout' && (
+                      <Li>
+                        {agent.name} has a bond of {f.ngn(agent.bond.ngn)} locked on-chain. If you pay and are not paid, NimPoint refunds you from it.
+                      </Li>
+                    )}
                     <Li>Rate held for 30 minutes. If something goes wrong, you can report it from the order page.</Li>
                   </ul>
 
@@ -577,8 +623,13 @@ export function Flow() {
                     {error && <Notice tone="error">{error}</Notice>}
                     {wallet.status === 'outside' ? (
                       <OpenInNimiqPay compact />
-                    ) : wallet.status === 'denied' ? (
-                      <Notice tone="warn">Allow NimPoint to see your wallet address in Nimiq Pay to continue.</Notice>
+                    ) : wallet.status === 'denied' || (wallet.status === 'ready' && !wallet.address) ? (
+                      <>
+                        <Notice tone="warn">NimPoint needs to see your wallet address to find your payment. It can never move your NIM.</Notice>
+                        <Button className="w-full" onClick={() => void wallet.refresh()}>
+                          Allow wallet access
+                        </Button>
+                      </>
                     ) : (
                       <Button className="w-full" variant={kind === 'cashout' ? 'gold' : 'primary'} loading={creating || wallet.status === 'connecting'} disabled={!agreed || !rate || !!amountProblem} onClick={submit}>
                         {kind === 'cashout' ? `Send ${f.nim(nimAmount)}` : `Start top-up of ${f.ngn(ngnValue)}`}
@@ -595,15 +646,43 @@ export function Flow() {
 }
 
 function WalletChip({ status, address }: { status: string; address: string | null }) {
-  if (status === 'ready' && address)
-    return (
-      <span className="flex items-center gap-2 rounded-full border border-line bg-card px-3 py-1.5 text-[13px] font-medium">
-        <span className="h-2 w-2 rounded-full bg-naira" />
-        <span className="font-mono tabular">{f.shortAddress(address)}</span>
-      </span>
-    );
+  if (status === 'ready' && address) return <AddressButton address={address} />;
   if (status === 'connecting') return <span className="h-8 w-28 animate-pulse rounded-full bg-paper-2" />;
   return <span className="rounded-full bg-paper-2 px-3 py-1.5 text-[13px] text-ink-3">Preview mode</span>;
+}
+
+/** Tap to copy your full wallet address (also how agents find theirs). */
+function AddressButton({ address }: { address: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(address);
+    } catch {
+      const t = document.createElement('textarea');
+      t.value = address;
+      document.body.appendChild(t);
+      t.select();
+      document.execCommand('copy');
+      t.remove();
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1600);
+  };
+  return (
+    <button onClick={copy} aria-label="Copy my wallet address" className="flex items-center gap-2 rounded-full border border-line bg-card px-3 py-1.5 text-[13px] font-medium">
+      <span className="h-2 w-2 rounded-full bg-naira" />
+      <span className="font-mono tabular">{copied ? 'Address copied' : f.shortAddress(address)}</span>
+    </button>
+  );
+}
+
+function Shield() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0 text-naira" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 3 5 6v5c0 4.5 3 8.3 7 10 4-1.7 7-5.5 7-10V6z" />
+      <path d="m9.5 12 2 2 3.5-4" />
+    </svg>
+  );
 }
 
 function Avatar({ name }: { name: string }) {

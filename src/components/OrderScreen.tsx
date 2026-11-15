@@ -98,6 +98,12 @@ export function OrderScreen({ id }: { id: string }) {
     setBusy('pay');
     setActionError(null);
     try {
+      // "Pay again": ask the server to check the chain first. If the first payment landed, stop here.
+      if (sentAt !== null) {
+        const fresh = await orderAction(order.id, { action: 'sync' });
+        setView(fresh);
+        if (fresh.order.status !== 'awaiting_payment' && fresh.order.status !== 'expired') return;
+      }
       const result = await payWithMemo(order.nimRecipient, order.nim, order.memo);
       writeSent(order.id);
       setSentAt(Date.now());
@@ -113,7 +119,7 @@ export function OrderScreen({ id }: { id: string }) {
     } finally {
       setBusy(null);
     }
-  }, [order]);
+  }, [order, sentAt]);
 
   // Came straight from "Send": open the Nimiq Pay prompt once.
   useEffect(() => {
@@ -176,7 +182,15 @@ export function OrderScreen({ id }: { id: string }) {
       </motion.section>
 
       <div className="mt-5 space-y-4">
+        {order.network === 'testnet' && <Notice tone="warn">Test order. This NIM is on the Nimiq test network and has no real value, so no real Naira is owed.</Notice>}
         {actionError && <Notice tone="error">{actionError}</Notice>}
+        {order.extraPayments?.length ? (
+          <Notice tone="warn">
+            {order.kind === 'cashout'
+              ? `We also received ${f.nim(order.extraPayments.reduce((a, t) => a + t.nim, 0))} more with this order's code. That's an extra payment: ${agentName} has been told to refund it to your wallet.`
+              : `${agentName} sent you ${f.nim(order.extraPayments.reduce((a, t) => a + t.nim, 0))} more than this order. Please send it back to them.`}
+          </Notice>
+        ) : null}
         {shortNote && order.status !== 'completed' && (
           <Notice tone="warn">
             {shortNote}. You&apos;ll receive {f.ngn(payout)}.
@@ -207,7 +221,7 @@ export function OrderScreen({ id }: { id: string }) {
               ) : null}
               {wallet.status !== 'outside' && canRetryPay && (
                 <Button variant="gold" className="mt-3 w-full" loading={busy === 'pay' || wallet.status === 'connecting'} onClick={pay}>
-                  {sentAt ? 'Payment not found? Pay again' : `Pay ${f.nim(order.nim)} with Nimiq Pay`}
+                  {sentAt ? 'Not in your Nimiq Pay history? Pay again' : `Pay ${f.nim(order.nim)} with Nimiq Pay`}
                 </Button>
               )}
             </div>
@@ -219,23 +233,37 @@ export function OrderScreen({ id }: { id: string }) {
             <p className="text-[15px] leading-snug text-ink-2">
               No payment arrived within 30 minutes, so this quote expired. If you did pay, don&apos;t worry: we keep watching the chain for 24 hours and this order will update by itself.
             </p>
-            <Link href="/" className="mt-4 flex h-12 items-center justify-center rounded-full bg-ink text-[15px] font-medium text-paper">
+            <Link href="/app" className="mt-4 flex h-12 items-center justify-center rounded-full bg-ink text-[15px] font-medium text-paper">
               Start a new order
             </Link>
           </Card>
         )}
 
-        {/* ── cash pickup code ── */}
-        {cash && ((order.kind === 'cashout' && ['paid', 'payout_sent'].includes(order.status)) || (order.kind === 'topup' && order.status === 'awaiting_fiat')) && (
+        {/* ── cash pickup code: a secret only this phone is shown (the order ID is public on-chain) ── */}
+        {cash && order.kind === 'cashout' && ['paid', 'payout_sent'].includes(order.status) &&
+          (order.pickupCode ? (
+            <Card className="overflow-hidden">
+              <div className="bg-ink px-5 py-6 text-center text-paper">
+                <p className="text-[13px] uppercase tracking-[0.12em] text-paper/60">Pickup code</p>
+                <p className="mt-2 font-mono text-[40px] font-semibold tracking-[0.12em]">
+                  {order.pickupCode.slice(0, 3)} {order.pickupCode.slice(3)}
+                </p>
+                <p className="mt-1 text-[14px] text-paper/70">
+                  Tell this code to {agentName} at the stand. They hand you {f.ngn(payout)}. Don&apos;t share it with anyone else.
+                </p>
+              </div>
+            </Card>
+          ) : (
+            <Notice>The pickup code only shows on the phone that placed this order. Open NimPoint there to collect your cash.</Notice>
+          ))}
+        {cash && order.kind === 'topup' && order.status === 'awaiting_fiat' && (
           <Card className="overflow-hidden">
             <div className="bg-ink px-5 py-6 text-center text-paper">
-              <p className="text-[13px] uppercase tracking-[0.12em] text-paper/60">{order.kind === 'cashout' ? 'Pickup code' : 'Show this code'}</p>
+              <p className="text-[13px] uppercase tracking-[0.12em] text-paper/60">Show this code</p>
               <p className="mt-2 font-mono text-[40px] font-semibold tracking-[0.12em]">
                 {order.id.slice(0, 4)} {order.id.slice(4)}
               </p>
-              <p className="mt-1 text-[14px] text-paper/70">
-                {order.kind === 'cashout' ? `Show this to ${agentName}. They hand you ${f.ngn(payout)}.` : `Hand ${f.ngn(order.ngn)} to ${agentName}.`}
-              </p>
+              <p className="mt-1 text-[14px] text-paper/70">Hand {f.ngn(order.ngn)} to {agentName}.</p>
             </div>
           </Card>
         )}
@@ -274,9 +302,17 @@ export function OrderScreen({ id }: { id: string }) {
                     : `Check your ${order.bank?.bankName ?? 'bank'} app for ${f.ngn(payout)} from ${agentName}.`
                 : `${f.nim(order.tx?.nim ?? order.nim)} has landed in your Nimiq Pay wallet.`}
             </p>
+            {order.kind === 'cashout' && view?.agent?.bond && view.agent.bond.nim > 0 && (
+              <p className="mt-2 text-[13px] leading-snug text-naira">
+                Protected by {agentName}&apos;s bond of {f.ngn(view.agent.bond.ngn)}. If the money never comes, report it and NimPoint refunds you from the bond.
+              </p>
+            )}
             <Button className="mt-4 w-full" loading={busy === 'confirm'} onClick={confirm}>
               {order.kind === 'cashout' ? "I've received my Naira" : 'Confirm received'}
             </Button>
+            {order.kind === 'cashout' && order.status === 'payout_sent' && (
+              <p className="mt-2 text-center text-[12px] leading-snug text-ink-3">Only confirm once the money is in your account. With no confirmation and no report for 24 hours, the order closes by itself.</p>
+            )}
             {order.status !== 'disputed' && order.kind === 'cashout' && (
               <Button variant="quiet" size="sm" className="mt-2 w-full" onClick={() => setDisputeOpen(true)}>
                 Not received?
@@ -300,7 +336,7 @@ export function OrderScreen({ id }: { id: string }) {
 
         <Receipt order={order} agentName={agentName} />
 
-        <Link href="/" className="flex h-12 items-center justify-center text-[15px] font-medium text-ink-2">
+        <Link href="/app" className="flex h-12 items-center justify-center text-[15px] font-medium text-ink-2">
           Back to NimPoint
         </Link>
       </div>
@@ -346,7 +382,18 @@ function Headline({ order, agentName, waitingChain }: { order: Order; agentName:
           : [`${payout} on the way`, `Payment verified on-chain. ${agentName} is sending it now.`]
         : [`${f.nim(order.tx?.nim ?? order.nim)} arrived`, 'Verified on the Nimiq blockchain.'],
     payout_sent: [`${payout} sent`, `${agentName} marked it as paid${order.payoutRef ? ` · ref ${order.payoutRef}` : ''}.`],
-    completed: ['All done', order.kind === 'cashout' ? `${payout} received. Thanks for using NimPoint.` : `${f.nim(order.tx?.nim ?? order.nim)} received.`],
+    completed: [
+      'All done',
+      order.resolution === 'refunded'
+        ? `NimPoint refunded you ${f.nim(order.refundTx?.nim ?? order.tx?.nim ?? order.nim)} from ${agentName}'s bond. The refund is on-chain.`
+        : order.resolution === 'agent_paid'
+          ? `NimPoint checked this order: ${agentName} paid ${payout}.`
+          : order.autoCompleted
+            ? 'Closed automatically: no problem was reported in time.'
+            : order.kind === 'cashout'
+              ? `${payout} received. Thanks for using NimPoint.`
+              : `${f.nim(order.tx?.nim ?? order.nim)} received.`,
+    ],
     disputed: ['We’re on it', `${agentName} has been alerted and will reach out. Your payment is recorded on-chain.`],
     awaiting_fiat: cash ? [`Hand over ${f.ngn(order.ngn)}`, `at ${agentName}`] : [`Send ${f.ngn(order.ngn)}`, `to ${agentName}'s account below`],
     fiat_sent: ['Waiting for the agent', `${agentName} is checking your payment, then sends ${f.nim(order.nim)}.`],
@@ -431,8 +478,15 @@ function Receipt({ order, agentName }: { order: Order; agentName: string }) {
   if (order.tx)
     rows.push([
       'Transaction',
-      <a key="t" href={EXPLORER_TX(order.tx.hash)} target="_blank" rel="noreferrer" className="font-mono text-ink underline underline-offset-2">
+      <a key="t" href={EXPLORER_TX(order.tx.hash, order.network)} target="_blank" rel="noreferrer" className="font-mono text-ink underline underline-offset-2">
         {order.tx.hash.slice(0, 8)}…{order.tx.hash.slice(-6)}
+      </a>,
+    ]);
+  if (order.refundTx)
+    rows.push([
+      'Refund',
+      <a key="r" href={EXPLORER_TX(order.refundTx.hash, order.network)} target="_blank" rel="noreferrer" className="font-mono text-ink underline underline-offset-2">
+        {order.refundTx.hash.slice(0, 8)}…{order.refundTx.hash.slice(-6)}
       </a>,
     ]);
   if (order.receipt) rows.push(['Receipt', order.receipt.verified ? 'Signed by your wallet ✓' : 'Confirmed']);

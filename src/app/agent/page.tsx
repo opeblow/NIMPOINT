@@ -6,15 +6,21 @@ import { useCallback, useEffect, useState } from 'react';
 import { api, ApiError } from '@/lib/api';
 import * as f from '@/lib/format';
 import { agentKey, rememberAgentKey } from '@/lib/local';
-import { payWithMemo, walletErrorMessage } from '@/lib/nimiq-client';
-import type { Order, PublicAgent } from '@/lib/types';
+import { definitelyNotSent, payWithMemo, walletErrorMessage } from '@/lib/nimiq-client';
+import type { Bond, Order, PublicAgent } from '@/lib/types';
 import { StatusPill } from '@/components/StatusPill';
 import { Button, Card, CopyField, cx, Notice, Sheet, Spinner, Stars, Wordmark } from '@/components/ui';
 
 interface Dash {
   agent: PublicAgent;
+  /** Which network the header numbers are for. */
+  statsNetwork?: 'mainnet' | 'testnet';
+  bond?: Bond | null;
   orders: Order[];
 }
+
+/** Matches the server's lock: after this, a stuck send may be retried. */
+const SEND_LOCK_MS = 10 * 60_000;
 
 const needsAgent = (o: Order) => (o.kind === 'cashout' && o.status === 'paid') || (o.kind === 'topup' && ['fiat_sent', 'awaiting_fiat', 'disputed'].includes(o.status) && !o.tx);
 const isOpen = (o: Order) => !needsAgent(o) && !['completed', 'expired'].includes(o.status);
@@ -26,6 +32,7 @@ export default function AgentConsole() {
   const [err, setErr] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   const [qrOpen, setQrOpen] = useState(false);
+  const [bondOpen, setBondOpen] = useState(false);
 
   const load = useCallback(async (k: string) => {
     try {
@@ -109,7 +116,10 @@ export default function AgentConsole() {
       <section className="mt-4 rounded-[28px] bg-ink p-5 text-paper">
         <div className="flex items-start justify-between gap-3">
           <div>
-            <p className="text-[13px] text-paper/60">{agent.area}</p>
+            <p className="text-[13px] text-paper/60">
+              {agent.area}
+              {dash.statsNetwork === 'testnet' ? ' · test network numbers' : ''}
+            </p>
             <p className="text-[22px] font-semibold tracking-[-0.02em]">{agent.name}</p>
           </div>
           <OnlineSwitch
@@ -143,6 +153,28 @@ export default function AgentConsole() {
         <div className="mt-4">
           <Notice tone="warn">{err}</Notice>
         </div>
+      )}
+
+      {dash.bond && (
+        <Card className="mt-4 p-5">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-[13px] text-ink-3">Your bond{dash.bond.network === 'testnet' ? ' (test network)' : ''}</p>
+              <p className="text-[24px] font-semibold tracking-[-0.03em] tabular">{f.nim(dash.bond.nim)}</p>
+              <p className="text-[13px] text-ink-2 tabular">
+                Worth {f.ngn(dash.bond.ngn)} · {f.ngn(dash.bond.exposureNgn)} in use · <b className="text-ink">{f.ngn(dash.bond.availableNgn)} free</b>
+              </p>
+            </div>
+            <Button size="sm" variant={dash.bond.nim > 0 ? 'ghost' : 'gold'} onClick={() => setBondOpen(true)}>
+              Add
+            </Button>
+          </div>
+          <p className="mt-3 text-[13px] leading-snug text-ink-3">
+            {dash.bond.nim > 0
+              ? 'Your bond is the most you can owe customers at one time. Each cash-out uses part of it until the customer confirms.'
+              : 'You need a bond before you can take orders. It protects your customers and stays yours.'}
+          </p>
+        </Card>
       )}
 
       <Section title={`Needs you${todo.length ? ` · ${todo.length}` : ''}`}>
@@ -185,6 +217,11 @@ export default function AgentConsole() {
       <Sheet open={qrOpen} onClose={() => setQrOpen(false)} title="Your NimPoint QR">
         <AgentQr agentId={agent.id} name={agent.name} />
       </Sheet>
+      {dash.bond && (
+        <Sheet open={bondOpen} onClose={() => setBondOpen(false)} title="Add to your bond">
+          <BondForm bond={dash.bond} onDone={() => (setBondOpen(false), void load(key))} />
+        </Sheet>
+      )}
     </Shell>
   );
 }
@@ -194,7 +231,7 @@ function Shell({ children }: { children: React.ReactNode }) {
     <div className="mx-auto min-h-[100dvh] w-full max-w-md px-4 pb-12 pt-[max(0.75rem,env(safe-area-inset-top))]">
       <header className="flex h-12 items-center justify-between">
         <Wordmark />
-        <Link href="/" className="text-[13px] font-medium text-ink-3">
+        <Link href="/app" className="text-[13px] font-medium text-ink-3">
           Customer app
         </Link>
       </header>
@@ -223,8 +260,16 @@ function Line({ order: o }: { order: Order }) {
         </p>
         <p className="flex items-center gap-2 text-[12px] text-ink-3">
           <span className="font-mono">{o.id}</span> · {f.ago(o.createdAt)}
+          {o.network === 'testnet' ? <TestTag /> : null}
           {o.rating ? <Stars value={o.rating} size="sm" /> : null}
         </p>
+        {o.extraPayments?.length ? (
+          <p className="mt-0.5 text-[12px] font-medium text-danger">
+            {o.kind === 'cashout'
+              ? `Paid twice: refund ${f.nim(o.extraPayments.reduce((a, t) => a + t.nim, 0))} to ${f.shortAddress(o.wallet)}`
+              : `You sent ${f.nim(o.extraPayments.reduce((a, t) => a + t.nim, 0))} extra. Ask the customer to return it.`}
+          </p>
+        ) : null}
       </div>
       <StatusPill order={o} />
     </div>
@@ -233,6 +278,7 @@ function Line({ order: o }: { order: Order }) {
 
 function TodoCard({ order: o, agentKey: key, onChange }: { order: Order; agentKey: string; onChange: () => void }) {
   const [ref, setRef] = useState('');
+  const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const sentKey = `np:agent-sent:${o.id}`;
@@ -260,12 +306,43 @@ function TodoCard({ order: o, agentKey: key, onChange }: { order: Order; agentKe
 
   const payout = o.payoutNgn ?? o.ngn;
 
+  /**
+   * Top-up: the server checks the chain and takes a lock before Nimiq Pay opens,
+   * so a double tap or a second phone can't send the same NIM twice.
+   */
+  const sendNim = async (retry: boolean) => {
+    await api('/api/agent', { method: 'POST', agentKey: key, json: { action: 'nim_sending', id: o.id, retry } });
+    let hash: unknown;
+    try {
+      hash = await payWithMemo(o.wallet, o.nim, o.memo);
+    } catch (e) {
+      // Only release the lock when Nimiq Pay is sure nothing left the wallet.
+      if (definitelyNotSent(e)) await api('/api/agent', { method: 'POST', agentKey: key, json: { action: 'nim_cancelled', id: o.id } }).catch(() => {});
+      throw e;
+    }
+    try {
+      localStorage.setItem(sentKey, '1');
+    } catch {
+      /* ignore */
+    }
+    setSent(true);
+    await api('/api/agent', { method: 'POST', agentKey: key, json: { action: 'nim_sent', id: o.id, hash: String(hash) } });
+  };
+
   return (
     <Card className={cx('overflow-hidden', o.status === 'disputed' && 'border-danger/40')}>
       <div className="flex items-center justify-between px-5 pt-4">
-        <span className="font-mono text-[13px] text-ink-3">#{o.id}</span>
+        <span className="flex items-center gap-2 font-mono text-[13px] text-ink-3">
+          #{o.id}
+          {o.network === 'testnet' ? <TestTag /> : null}
+        </span>
         <StatusPill order={o} />
       </div>
+      {o.network === 'testnet' && (
+        <p className="mx-5 mt-2 rounded-2xl bg-danger-soft p-3 text-[13px] font-medium leading-snug text-danger">
+          Test order. This NIM is on the Nimiq test network and has no real value. Do not send real Naira for it.
+        </p>
+      )}
       {o.kind === 'cashout' ? (
         <div className="px-5 pb-5">
           <p className="mt-1 text-[26px] font-semibold tracking-[-0.03em] tabular">Pay {f.ngn(payout)}</p>
@@ -277,9 +354,20 @@ function TodoCard({ order: o, agentKey: key, onChange }: { order: Order; agentKe
               <CopyField label={o.bank.bankName} value={o.bank.accountName} mono={false} />
             </div>
           ) : (
-            <p className="mt-3 rounded-2xl bg-gold-soft p-3 text-[14px] text-gold-deep">
-              Cash pickup. Match the code on the customer&apos;s phone: <b className="font-mono">{o.id.slice(0, 4)} {o.id.slice(4)}</b>
-            </p>
+            <>
+              <p className="mt-3 rounded-2xl bg-gold-soft p-3 text-[14px] text-gold-deep">
+                Cash pickup. Ask for the 6-digit pickup code on the customer&apos;s NimPoint screen and tap Check code. If it is right, the order moves to In progress: hand over the cash. If not, don&apos;t pay.
+              </p>
+              <input
+                value={code}
+                onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                inputMode="numeric"
+                autoComplete="off"
+                placeholder="Pickup code"
+                aria-label="Customer's pickup code"
+                className="mt-3 h-12 w-full rounded-xl border border-line bg-card px-3 text-center font-mono text-[22px] tracking-[0.3em] outline-none focus:border-ink"
+              />
+            </>
           )}
           {o.mode === 'bank' && (
             <input
@@ -294,9 +382,12 @@ function TodoCard({ order: o, agentKey: key, onChange }: { order: Order; agentKe
             size="md"
             className="mt-3 w-full"
             loading={busy}
-            onClick={() => act(() => api('/api/agent', { method: 'POST', agentKey: key, json: { action: 'payout_sent', id: o.id, ref: ref || undefined } }))}
+            disabled={o.mode === 'cash' && code.length !== 6}
+            onClick={() =>
+              act(() => api('/api/agent', { method: 'POST', agentKey: key, json: { action: 'payout_sent', id: o.id, ref: ref || undefined, code: o.mode === 'cash' ? code : undefined } }))
+            }
           >
-            {o.mode === 'bank' ? `I've sent ${f.ngn(payout)}` : `I've handed over ${f.ngn(payout)}`}
+            {o.mode === 'bank' ? `I've sent ${f.ngn(payout)}` : `Check code for ${f.ngn(payout)}`}
           </Button>
         </div>
       ) : (
@@ -308,35 +399,81 @@ function TodoCard({ order: o, agentKey: key, onChange }: { order: Order; agentKe
           </p>
           <p className="mt-2 font-mono text-[12px] text-ink-3">To {f.shortAddress(o.wallet)}</p>
           {err && <p className="mt-2 text-[13px] text-danger">{err}</p>}
-          {sent ? (
-            <p className="mt-3 flex items-center gap-2 rounded-2xl bg-paper-2 p-3 text-[14px] text-ink-2">
-              <Spinner className="h-4 w-4" /> Sent. Waiting for the chain to confirm…
-            </p>
+          {sent || o.sendStartedAt ? (
+            <>
+              <p className="mt-3 flex items-center gap-2 rounded-2xl bg-paper-2 p-3 text-[14px] text-ink-2">
+                <Spinner className="h-4 w-4" /> Sent. Waiting for the chain to confirm…
+              </p>
+              {o.sendStartedAt && Date.now() - o.sendStartedAt > SEND_LOCK_MS && (
+                <Button size="md" variant="ghost" className="mt-2 w-full" loading={busy} onClick={() => act(() => sendNim(true))}>
+                  Not in your Nimiq Pay history? Send again
+                </Button>
+              )}
+            </>
           ) : (
-            <Button
-              size="md"
-              variant="gold"
-              className="mt-3 w-full"
-              loading={busy}
-              onClick={() =>
-                act(async () => {
-                  const hash = await payWithMemo(o.wallet, o.nim, o.memo);
-                  try {
-                    localStorage.setItem(sentKey, '1');
-                  } catch {
-                    /* ignore */
-                  }
-                  setSent(true);
-                  await api('/api/agent', { method: 'POST', agentKey: key, json: { action: 'nim_sent', id: o.id, hash: String(hash) } });
-                })
-              }
-            >
+            <Button size="md" variant="gold" className="mt-3 w-full" loading={busy} onClick={() => act(() => sendNim(false))}>
               Send {f.nim(o.nim)} with Nimiq Pay
             </Button>
           )}
         </div>
       )}
     </Card>
+  );
+}
+
+const TestTag = () => <span className="rounded-full bg-danger-soft px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-danger">Test</span>;
+
+/** Add to the bond from Nimiq Pay in one tap, or copy the details to send from any Nimiq wallet. */
+function BondForm({ bond, onDone }: { bond: Bond; onDone: () => void }) {
+  const [amount, setAmount] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [sent, setSent] = useState(false);
+  const nim = Number(amount || 0);
+  return (
+    <div className="space-y-3">
+      <p className="text-[15px] leading-snug text-ink-2">
+        Send NIM to the NimPoint bond wallet with the memo below. It shows here about a minute after it confirms. The memo is how the chain knows the deposit is yours, so copy it exactly.
+      </p>
+      <div className="divide-y divide-line/70 rounded-2xl bg-paper-2/60 px-4">
+        <CopyField label="Bond wallet" value={bond.address} />
+        <CopyField label="Memo (required)" value={bond.memo} />
+      </div>
+      <input
+        inputMode="decimal"
+        value={amount}
+        onChange={(e) => setAmount(e.target.value.replace(/[^0-9.]/g, '').slice(0, 12))}
+        placeholder="Amount in NIM"
+        className="h-12 w-full rounded-xl border border-line bg-card px-3 text-[16px] outline-none focus:border-ink"
+      />
+      {err && <p className="text-[13px] text-danger">{err}</p>}
+      {sent ? (
+        <Notice tone="info">Sent. Your bond updates here once the chain confirms it.</Notice>
+      ) : (
+        <Button
+          variant="gold"
+          className="w-full"
+          loading={busy}
+          disabled={!(nim > 0)}
+          onClick={async () => {
+            setBusy(true);
+            setErr(null);
+            try {
+              await payWithMemo(bond.address, nim, bond.memo);
+              setSent(true);
+              setTimeout(onDone, 2500);
+            } catch (e) {
+              setErr(walletErrorMessage(e));
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          Send {nim > 0 ? f.nim(nim) : 'NIM'} with Nimiq Pay
+        </Button>
+      )}
+      <p className="text-[13px] leading-snug text-ink-3">To take your bond back, finish your open orders and ask NimPoint. It is returned from the bond wallet on-chain.</p>
+    </div>
   );
 }
 
@@ -356,7 +493,7 @@ function OnlineSwitch({ online, onChange }: { online: boolean; onChange: (v: boo
 
 function AgentQr({ agentId, name }: { agentId: string; name: string }) {
   const [url, setUrl] = useState('');
-  useEffect(() => setUrl(`https://nimpay.app/miniapps/open/${window.location.host}/?agent=${agentId}&mode=cash`), [agentId]);
+  useEffect(() => setUrl(`https://nimpay.app/miniapps/open/${window.location.host}/app?agent=${agentId}&mode=cash`), [agentId]);
   return (
     <div className="text-center">
       <div className="mx-auto w-fit rounded-[28px] border border-line bg-white p-5">

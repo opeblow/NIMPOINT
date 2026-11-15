@@ -1,24 +1,32 @@
 import { listAgents } from '@/lib/agents';
-import { MEMO_PREFIX } from '@/lib/config';
+import { bondConfig } from '@/lib/bond';
+import { asNetwork, MEMO_PREFIX, type Network } from '@/lib/config';
 import { handle, ok } from '@/lib/http';
-import { ownerOf, recentTransactions, sameAddress } from '@/lib/nimiq-rpc';
-import { allOrders } from '@/lib/orders';
+import { ownerOf, sameAddress, transactionHistory } from '@/lib/nimiq-rpc';
+import { agentBond, allOrders, healNetwork, netOf } from '@/lib/orders';
 import { store } from '@/lib/store';
 import type { Proof } from '@/lib/types';
+import { listUsers } from '@/lib/users';
 
 export const dynamic = 'force-dynamic';
 
 /** Exactly the memo format NimPoint creates: prefix + 8-char order code. */
 const MEMO_RE = new RegExp(`^${MEMO_PREFIX}-[2-9A-HJKMNP-Z]{8}$`);
 
+/** The team's own wallets, so their test orders are labelled instead of passed off as users. */
+function teamWallets(): string[] {
+  return (process.env.TEAM_WALLETS ?? '').split(',').map((w) => w.trim()).filter(Boolean);
+}
+const isTeam = (wallet: string) => teamWallets().some((t) => sameAddress(t, wallet));
+
 const settled = new Set(['paid', 'payout_sent', 'completed', 'disputed']);
 
-async function chainCount() {
+async function chainCount(net: Network) {
   const agents = listAgents();
-  const txs = (await Promise.all(agents.map((a) => recentTransactions(a.address, 500).catch(() => [])))).flat();
+  const txs = (await Promise.all(agents.map((a) => transactionHistory(a.address, net, { max: 5_000, pageSize: 500 }).catch(() => [])))).flat();
   const memoTxs = txs.filter((t) => MEMO_RE.test(t.memo.trim().toUpperCase()) && agents.some((a) => sameAddress(a.address, t.to)));
   const senders = [...new Set(memoTxs.map((t) => t.from))].slice(0, 200);
-  const owners = await Promise.all(senders.map((s) => ownerOf(s).catch(() => s)));
+  const owners = await Promise.all(senders.map((s) => ownerOf(s, net).catch(() => s)));
   return {
     memoPayments: new Set(memoTxs.map((t) => t.hash)).size,
     uniqueSenders: new Set(owners).size,
@@ -26,12 +34,23 @@ async function chainCount() {
   };
 }
 
-export async function GET() {
-  try {
-    const cached = await store.get<Proof>('proof');
-    if (cached && Date.now() - cached.generatedAt < 60_000) return ok(cached);
+async function bonds(net: Network): Promise<Proof['bonds']> {
+  const cfg = bondConfig();
+  if (!cfg || cfg.network !== net) return [];
+  const all = await Promise.all(listAgents().map(async (a) => ({ a, b: await agentBond(a, net).catch(() => null) })));
+  return all.flatMap(({ a, b }) => (b ? [{ agent: a.name, address: b.address, memo: b.memo, nim: b.nim, ngn: b.ngn }] : []));
+}
 
-    const orders = (await allOrders()).filter((o) => o.tx && settled.has(o.status));
+/** Mainnet by default. `?network=testnet` shows test-network activity, which is never mixed into the real numbers. */
+export async function GET(req: Request) {
+  try {
+    const net = asNetwork(new URL(req.url).searchParams.get('network'));
+    const cacheKey = net === 'mainnet' ? 'proof' : `proof:${net}`;
+    const cached = await store.get<Proof>(cacheKey);
+    if (cached?.network === net && Date.now() - cached.generatedAt < 60_000) return ok(cached);
+
+    const everything = await Promise.all((await allOrders()).filter((o) => o.tx && settled.has(o.status)).map(healNetwork));
+    const orders = everything.filter((o) => netOf(o) === net);
     const wallets = new Set(orders.map((o) => o.wallet));
     const ratings = orders.map((o) => o.rating).filter((r): r is number => !!r);
 
@@ -44,11 +63,19 @@ export async function GET() {
       byDay.set(day, d);
     }
 
+    const users = await listUsers(net);
     const proof: Proof = {
       generatedAt: Date.now(),
+      network: net,
+      registeredUsers: users.length,
+      registrations: users.map((u) => ({ wallet: u.wallet, at: u.at })),
+      otherNetworkOrders: everything.length - orders.length,
+      bonds: await bonds(net),
+      bondNetwork: bondConfig()?.network ?? null,
       ledger: {
         uniqueWallets: wallets.size,
         orders: orders.length,
+        teamOrders: orders.filter((o) => isTeam(o.wallet)).length,
         completed: orders.filter((o) => o.status === 'completed').length,
         volumeNgn: orders.reduce((s, o) => s + (o.payoutNgn ?? o.ngn), 0),
         volumeNim: orders.reduce((s, o) => s + (o.tx?.nim ?? 0), 0),
@@ -65,11 +92,12 @@ export async function GET() {
           at: o.tx!.at,
           tx: o.tx!.hash,
           rating: o.rating,
+          team: isTeam(o.wallet),
         })),
       },
-      chain: await chainCount().catch(() => ({ memoPayments: 0, uniqueSenders: 0, agents: [] })),
+      chain: await chainCount(net).catch(() => ({ memoPayments: 0, uniqueSenders: 0, agents: [] })),
     };
-    await store.set('proof', proof, 3600);
+    await store.set(cacheKey, proof, 3600);
     return ok(proof);
   } catch (err) {
     return handle(err);

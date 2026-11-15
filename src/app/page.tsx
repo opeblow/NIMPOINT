@@ -1,11 +1,10 @@
 import { Suspense } from 'react';
-import { AppSkeleton } from '@/components/Skeleton';
-import { Flow } from '@/components/Flow';
+import { Landing } from '@/components/Landing';
 
 export default function Home() {
   return (
-    <Suspense fallback={<AppSkeleton />}>
-      <Flow />
+    <Suspense>
+      <Landing />
     </Suspense>
   );
 }

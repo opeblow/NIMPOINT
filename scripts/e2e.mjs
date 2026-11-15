@@ -1,8 +1,17 @@
 // End-to-end test of every order path against a running app + mock Nimiq node.
 // Usage: APP=http://localhost:3100 RPC=http://localhost:8648 AGENT_KEY=... node scripts/e2e.mjs
+// Optional, to cover more: BOND_ADDRESS (agent bonds), AUTO_COMPLETE_MS (auto-complete), ADMIN_KEY (dispute resolution),
+// RPC_TEST (a second mock node the app uses as the Nimiq test network). Each must match the app's own environment.
+import { createHash, generateKeyPairSync, sign } from 'node:crypto';
+import { blake2b } from '@noble/hashes/blake2b';
+
 const APP = process.env.APP ?? 'http://localhost:3100';
 const RPC = process.env.RPC ?? 'http://localhost:8648';
+const RPC_TEST = process.env.RPC_TEST;
 const KEY = process.env.AGENT_KEY ?? 'test-agent-key-123';
+const BOND = process.env.BOND_ADDRESS;
+const AUTO_MS = Number(process.env.AUTO_COMPLETE_MS) || 0;
+const ADMIN = process.env.ADMIN_KEY;
 
 const AGENT = 'NQ11 AAAA AAAA AAAA AAAA AAAA AAAA AAAA AAAA';
 const USER1 = 'NQ22 BBBB BBBB BBBB BBBB BBBB BBBB BBBB BBBB';
@@ -18,18 +27,30 @@ const fail = (msg, extra) => {
 const check = (cond, msg, extra) => (cond ? (passed++, console.log(`✓ ${msg}`)) : fail(msg, extra));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function call(path, { method = 'GET', json, key } = {}) {
+const secrets = new Map(); // order id -> secret, as the creator's phone keeps it
+async function call(path, { method = 'GET', json, key, noToken, admin } = {}) {
+  const id = path.match(/^\/api\/orders\/([A-Z0-9]+)/)?.[1];
+  const token = id && !noToken ? secrets.get(id) : undefined;
   const res = await fetch(APP + path, {
     method,
-    headers: { ...(json ? { 'Content-Type': 'application/json' } : {}), ...(key ? { 'x-agent-key': key } : {}) },
+    headers: {
+      ...(json ? { 'Content-Type': 'application/json' } : {}),
+      ...(key ? { 'x-agent-key': key } : {}),
+      ...(admin ? { 'x-admin-key': admin } : {}),
+      ...(token ? { 'x-order-token': token } : {}),
+    },
     body: json ? JSON.stringify(json) : undefined,
   });
-  return { status: res.status, body: await res.json().catch(() => ({})) };
+  const body = await res.json().catch(() => ({}));
+  if (body.order?.secret) secrets.set(body.order.id, body.order.secret);
+  return { status: res.status, body };
 }
-const send = async (from, to, nim, data, htlcOwner) =>
-  (await (await fetch(RPC + '/_send', { method: 'POST', body: JSON.stringify({ from, to, value: Math.round(nim * 1e5), data, htlcOwner }) })).json()).hash;
+const send = async (from, to, nim, data, htlcOwner, rpc = RPC) =>
+  (await (await fetch(rpc + '/_send', { method: 'POST', body: JSON.stringify({ from, to, value: Math.round(nim * 1e5), data, htlcOwner }) })).json()).hash;
+const skip = (what, why) => console.log(`- skipped: ${what} (${why})`);
 
 const bank = { bankCode: '058', accountNumber: '0123456789', accountName: 'Ada Lovelace' };
+const BASE32 = '0123456789ABCDEFGHJKLMNPQRSTUVXY';
 
 // ── basics
 let r = await call('/api/rate');
@@ -37,8 +58,20 @@ check(r.status === 200 && r.body.mid > 0, 'live rate loads', r.body);
 r = await call('/api/agents');
 check(r.body.agents?.length === 1 && r.body.agents[0].online, 'agent listed and online', r.body);
 
+// ── agent bond: no deposit, no orders
+let bondNgn = 0;
+if (BOND) {
+  check(r.body.agents[0].bond && r.body.agents[0].bond.nim === 0, 'agent starts with no bond', r.body.agents[0].bond);
+  r = await call('/api/orders', { method: 'POST', json: { kind: 'cashout', mode: 'bank', agentId: 'yaba-1', wallet: USER1, ngn: 5000, bank } });
+  check(r.status === 400 && /bond/.test(r.body.error), 'agent without a bond gets no orders', r.body);
+  const mid = (await call('/api/rate')).body.mid;
+  // A deposit with the wrong memo is not a bond; the right memo is.
+  await send(AGENT_HTLC, BOND, 50000, 'hello', AGENT);
+  await send(AGENT_HTLC, BOND, Math.ceil(12000 / mid), 'NIMPOINT-BOND-YABA-1', AGENT);
+} else skip('agent bond', 'BOND_ADDRESS not set');
+
 // ── validation
-r = await call('/api/orders', { method: 'POST', json: { kind: 'cashout', mode: 'bank', agentId: 'yaba-1', wallet: USER1, ngn: 100, bank } });
+r = await call('/api/orders', { method: 'POST', json: { kind: 'cashout', mode: 'bank', agentId: 'yaba-1', wallet: USER1, ngn: 20, bank } });
 check(r.status === 400 && /between/.test(r.body.error), 'rejects amount under minimum', r.body);
 r = await call('/api/orders', { method: 'POST', json: { kind: 'cashout', mode: 'bank', agentId: 'yaba-1', wallet: USER1, ngn: 25000, bank } });
 check(r.status === 400, 'rejects amount over maximum', r.body);
@@ -58,12 +91,22 @@ r = await call('/api/orders', { method: 'POST', json: { kind: 'cashout', mode: '
 check(r.status === 200 && r.body.order.status === 'awaiting_payment', 'cash-out order created', r.body);
 const o1 = r.body.order;
 check(o1.memo === `NIMPOINT-${o1.id}` && o1.nim > 0, 'order has memo and NIM amount');
+if (BOND) {
+  r = await call('/api/agents');
+  bondNgn = r.body.agents[0].bond.ngn;
+  check(bondNgn >= 11900 && bondNgn <= 12200 && r.body.agents[0].bond.exposureNgn === 0, 'bond is read from the chain by memo', r.body.agents[0].bond);
+}
 r = await call('/api/orders', { method: 'POST', json: { kind: 'cashout', mode: 'bank', agentId: 'yaba-1', wallet: USER1, ngn: 5000, bank } });
 check(r.status === 429, 'double-tap within 3s is blocked', r.body);
 
-r = await call(`/api/orders/${o1.id}`);
+r = await call(`/api/orders/${o1.id}`, { noToken: true });
 check(r.body.order.status === 'awaiting_payment', 'no payment yet → still awaiting');
 check(r.body.order.bank.accountNumber.startsWith('••••'), 'account number masked on public order view', r.body.order.bank);
+check(r.body.order.bank.accountName === 'A. L.' && r.body.mine === false, "customer's name is only initials on the public view", r.body.order.bank);
+r = await call(`/api/orders?wallet=${encodeURIComponent(USER1)}`);
+check(r.body.orders.every((o) => !o.bank || (o.bank.accountName === 'A. L.' && o.bank.accountNumber.startsWith('••••'))), 'wallet lookup hides names and account numbers', r.body.orders);
+r = await call(`/api/orders/${o1.id}`);
+check(r.body.mine === true && r.body.order.bank.accountName === 'Ada Lovelace', 'the customer sees their own full details', r.body.order.bank);
 
 // User pays from their Nimiq Pay HTLC; app reports a serialized tx (not a hash) → memo scan must find it.
 const h1 = await send(HTLC1, AGENT, o1.nim, o1.memo, USER1);
@@ -86,6 +129,12 @@ check(r.body.order?.status === 'payout_sent', 'agent marks payout sent', r.body)
 r = await call('/api/agent', { method: 'POST', key: KEY, json: { action: 'payout_sent', id: o1.id } });
 check(r.status === 400, 'cannot mark payout twice');
 
+r = await call(`/api/orders/${o1.id}`, { method: 'POST', json: { action: 'confirm' }, noToken: true });
+check(r.status === 403, 'a stranger cannot confirm someone else\'s order', r.body);
+r = await call(`/api/orders/${o1.id}`);
+check(!r.body.order.secret, 'order secret is never shown on the public view');
+r = await call('/api/agent', { key: KEY });
+check(r.body.orders.every((o) => !o.secret), 'agent never sees order secrets');
 r = await call(`/api/orders/${o1.id}`, { method: 'POST', json: { action: 'confirm' } });
 check(r.body.order.status === 'completed', 'user confirms receipt');
 r = await call(`/api/orders/${o1.id}`, { method: 'POST', json: { action: 'rate', stars: 5, comment: 'Fast!' } });
@@ -126,6 +175,13 @@ r = await call(`/api/orders/${o3.id}`, { method: 'POST', json: { action: 'confir
 check(r.status === 400, 'cannot confirm top-up before NIM arrives');
 r = await call(`/api/orders/${o3.id}`, { method: 'POST', json: { action: 'fiat_sent' } });
 check(r.body.order.status === 'fiat_sent', 'user marks Naira sent');
+// only the agent, for the full amount, can mark a top-up as arrived
+await send(USER1, USER2, o3.nim, o3.memo, undefined);
+r = await call(`/api/orders/${o3.id}`, { method: 'POST', json: { action: 'sync' } });
+check(r.body.order.status === 'fiat_sent' && !r.body.order.tx, "a payment from someone other than the agent doesn't settle a top-up", r.body.order);
+const shortTopup = await send(AGENT_HTLC, USER2, Math.floor((o3.nim / 2) * 100) / 100, o3.memo, AGENT);
+r = await call('/api/agent', { method: 'POST', key: KEY, json: { action: 'nim_sent', id: o3.id, hash: shortTopup } });
+check(r.body.order?.status === 'fiat_sent' && !r.body.order.tx, "a short payment from the agent doesn't settle a top-up", r.body);
 // agent pays from their own Nimiq Pay HTLC to the user's wallet
 const h3 = await send(AGENT_HTLC, USER2, o3.nim, o3.memo, AGENT);
 r = await call('/api/agent', { method: 'POST', key: KEY, json: { action: 'nim_sent', id: o3.id, hash: h3 } });
@@ -140,6 +196,39 @@ check(r.body.ledger.uniqueWallets === 2, 'proof counts 2 unique wallets', r.body
 check(r.body.ledger.orders === 3, 'proof counts 3 settled orders', r.body.ledger);
 check(r.body.chain.memoPayments === 2 && r.body.chain.uniqueSenders === 1, 'chain-only count matches (2 cash-out payments, 1 owner)', r.body.chain);
 
+// ── cash pickup needs a secret code: the order ID is public on-chain, so it must not release cash
+const PICKER = 'NQ99 PPPP PPPP PPPP PPPP PPPP PPPP PPPP PPPP';
+r = await call('/api/orders', { method: 'POST', json: { kind: 'cashout', mode: 'cash', agentId: 'yaba-1', wallet: PICKER, ngn: 1000 } });
+const oc = r.body.order;
+check(/^\d{6}$/.test(oc?.pickupCode ?? ''), 'cash pickup gets a 6-digit code for the customer', oc);
+check(!oc.memo.includes(oc.pickupCode), 'pickup code is not in the on-chain memo');
+await send(PICKER, AGENT, oc.nim, oc.memo);
+r = await call(`/api/orders/${oc.id}`, { noToken: true });
+check(r.body.order.status === 'paid' && r.body.order.pickupCode === undefined && r.body.mine === false, 'a stranger who knows the order ID does not see the pickup code', r.body.order);
+r = await call(`/api/orders/${oc.id}`);
+check(r.body.order.pickupCode === oc.pickupCode && r.body.mine === true, "the customer's phone still sees the pickup code", r.body.order);
+r = await call('/api/agent', { key: KEY });
+check(r.body.orders.every((o) => o.pickupCode === undefined), 'the agent console never shows pickup codes');
+r = await call('/api/agent', { method: 'POST', key: KEY, json: { action: 'payout_sent', id: oc.id } });
+check(r.status === 400 && /pickup code/.test(r.body.error), 'cash cannot be released without the code', r.body);
+const wrong = oc.pickupCode === '000000' ? '111111' : '000000';
+r = await call('/api/agent', { method: 'POST', key: KEY, json: { action: 'payout_sent', id: oc.id, code: wrong } });
+check(r.status === 400 && /doesn't match/.test(r.body.error), 'a wrong code is refused', r.body);
+r = await call('/api/agent', { method: 'POST', key: KEY, json: { action: 'payout_sent', id: oc.id, code: oc.id } });
+check(r.status === 400, 'the public order ID does not work as a pickup code', r.body);
+r = await call('/api/agent', { method: 'POST', key: KEY, json: { action: 'payout_sent', id: oc.id, code: `${oc.pickupCode.slice(0, 3)} ${oc.pickupCode.slice(3)}` } });
+check(r.body.order?.status === 'payout_sent', 'the right code releases the cash', r.body);
+// A receipt signed by some other wallet is kept but not marked verified.
+const stranger = registration();
+r = await call(`/api/orders/${oc.id}`, { method: 'POST', json: { action: 'confirm', receipt: { message: stranger.message, publicKey: stranger.publicKey, signature: stranger.signature } } });
+check(r.body.order?.status === 'completed' && r.body.order.receipt?.verified === false, "a receipt signed by another wallet is not marked verified", r.body.order?.receipt);
+
+// ── a body that isn't JSON gets a clear 400, not a 500
+{
+  const res = await fetch(APP + '/api/orders', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: 'not json' });
+  check(res.status === 400, 'malformed request body is a 400', res.status);
+}
+
 // ── telegram webhook is locked down
 r = await call('/api/telegram', { method: 'POST', json: {} });
 check(r.status === 401, 'telegram webhook rejects calls without the secret');
@@ -150,5 +239,207 @@ await sleep(3200);
 r = await call('/api/orders', { method: 'POST', json: { kind: 'cashout', mode: 'cash', agentId: 'yaba-1', wallet: USER1, ngn: 2000 } });
 check(r.status === 400 && /offline/.test(r.body.error), 'offline agent gets no new orders', r.body);
 await call('/api/agent', { method: 'POST', key: KEY, json: { action: 'online', online: true } });
+
+// ── idempotency
+const USER3 = 'NQ55 EEEE EEEE EEEE EEEE EEEE EEEE EEEE EEEE';
+const idemBody = { kind: 'cashout', mode: 'bank', agentId: 'yaba-1', wallet: USER3, ngn: 4000, bank, idempotencyKey: 'e2e-idem-key-0001' };
+r = await call('/api/orders', { method: 'POST', json: idemBody });
+check(r.status === 200, 'order created with idempotency key', r.body);
+const o4 = r.body.order;
+r = await call('/api/orders', { method: 'POST', json: idemBody });
+check(r.status === 200 && r.body.order.id === o4.id, 'retry with same key returns the same order', r.body);
+r = await call('/api/orders', { method: 'POST', json: { ...idemBody, ngn: 4500 } });
+check(r.status === 422, 'same key with different details is refused', r.body);
+
+// many requests at once see one payment: exactly one "paid" event
+await send(HTLC1, AGENT, o4.nim, o4.memo, USER3);
+await Promise.all([
+  ...Array.from({ length: 6 }, () => call(`/api/orders/${o4.id}`, { method: 'POST', json: { action: 'sync' } })),
+  ...Array.from({ length: 4 }, () => call(`/api/orders/${o4.id}`)),
+  call('/api/agent', { key: KEY }),
+]);
+r = await call(`/api/orders/${o4.id}`);
+check(r.body.order.status === 'paid', 'concurrent syncs settle the order', r.body.order);
+check(r.body.order.events.filter((e) => e.status === 'paid').length === 1, 'concurrent syncs record exactly one payment', r.body.order.events);
+
+// payout marked while syncs run is never overwritten
+const racing = Array.from({ length: 6 }, () => call(`/api/orders/${o4.id}`, { method: 'POST', json: { action: 'sync' } }));
+r = await call('/api/agent', { method: 'POST', key: KEY, json: { action: 'payout_sent', id: o4.id } });
+await Promise.all(racing);
+check(r.body.order?.status === 'payout_sent', 'agent marks payout during concurrent syncs', r.body);
+r = await call(`/api/orders/${o4.id}`);
+check(r.body.order.status === 'payout_sent', 'payout_sent survives concurrent syncs', r.body.order);
+
+// user pays twice: second payment is recorded for refund, order unchanged
+const hExtra = await send(HTLC1, AGENT, o4.nim, o4.memo, USER3);
+r = await call(`/api/orders/${o4.id}`, { method: 'POST', json: { action: 'tx', hash: hExtra } });
+check(
+  r.body.order.status === 'payout_sent' && r.body.order.extraPayments?.length === 1 && r.body.order.extraPayments[0].hash === hExtra,
+  'duplicate payment flagged for refund',
+  r.body.order,
+);
+r = await call(`/api/orders/${o4.id}`, { method: 'POST', json: { action: 'sync' } });
+check(r.body.order.extraPayments.length === 1, 'duplicate payment recorded once');
+
+// ── the bond caps what the agent can owe at once (o4: ₦4,000 paid on-chain, not yet confirmed)
+const fresh = (c) => `NQ77 ${Array(8).fill(c.repeat(4)).join(' ')}`;
+if (BOND) {
+  r = await call('/api/orders', { method: 'POST', json: { kind: 'cashout', mode: 'bank', agentId: 'yaba-1', wallet: fresh('G'), ngn: 9000, bank } });
+  check(r.status === 400 && /can take up to/.test(r.body.error), 'cash-out bigger than the free bond is refused', r.body);
+  r = await call('/api/orders', { method: 'POST', json: { kind: 'cashout', mode: 'bank', agentId: 'yaba-1', wallet: fresh('H'), ngn: 7000, bank } });
+  check(r.status === 200, 'cash-out within the free bond is accepted', r.body);
+  r = await call('/api/orders', { method: 'POST', json: { kind: 'topup', mode: 'cash', agentId: 'yaba-1', wallet: fresh('J'), ngn: 15000 } });
+  check(r.status === 200, 'top-ups are not capped by the bond', r.body);
+}
+
+// agent top-up send lock
+await sleep(3200);
+r = await call('/api/orders', { method: 'POST', json: { kind: 'topup', mode: 'cash', agentId: 'yaba-1', wallet: USER3, ngn: 2500 } });
+const o5 = r.body.order;
+r = await call('/api/agent', { method: 'POST', key: KEY, json: { action: 'nim_sending', id: o5.id } });
+check(r.status === 200 && r.body.order.sendStartedAt > 0, 'agent send takes a lock', r.body);
+r = await call('/api/agent', { method: 'POST', key: KEY, json: { action: 'nim_sending', id: o5.id } });
+check(r.status === 409, 'second send is blocked', r.body);
+r = await call('/api/agent', { method: 'POST', key: KEY, json: { action: 'nim_sending', id: o5.id, retry: true } });
+check(r.status === 409 && /Wait/.test(r.body.error), 'retry is blocked while the first send may still land', r.body);
+r = await call('/api/agent', { method: 'POST', key: KEY, json: { action: 'nim_cancelled', id: o5.id } });
+check(r.status === 200 && !r.body.order.sendStartedAt, 'cancelled send releases the lock', r.body);
+r = await call('/api/agent', { method: 'POST', key: KEY, json: { action: 'nim_sending', id: o5.id } });
+check(r.status === 200, 'send can start again after a cancel', r.body);
+const h5 = await send(AGENT_HTLC, USER3, o5.nim, o5.memo, AGENT);
+r = await call('/api/agent', { method: 'POST', key: KEY, json: { action: 'nim_sent', id: o5.id, hash: h5 } });
+check(r.body.order?.status === 'paid', 'agent NIM verified', r.body);
+r = await call('/api/agent', { method: 'POST', key: KEY, json: { action: 'nim_sending', id: o5.id, retry: true } });
+check(r.status === 409 && /already paid/.test(r.body.error), 'no send once the chain shows it paid', r.body);
+
+// ── auto-complete: a silent customer can't keep an order (or the agent's bond) open forever
+if (AUTO_MS && AUTO_MS <= 20_000) {
+  const paidOutAt = (await call(`/api/orders/${o4.id}`)).body.order.events.find((e) => e.status === 'payout_sent').at;
+  await sleep(Math.max(0, paidOutAt + AUTO_MS + 300 - Date.now()));
+  r = await call(`/api/orders/${o4.id}`);
+  check(r.body.order.status === 'completed' && r.body.order.autoCompleted === true, 'unconfirmed payout completes by itself', r.body.order);
+  r = await call(`/api/orders/${o4.id}`, { method: 'POST', json: { action: 'rate', stars: 4 } });
+  check(r.body.order?.rating === 4, 'customer can still rate after auto-complete', r.body);
+  if (BOND) {
+    r = await call('/api/orders', { method: 'POST', json: { kind: 'cashout', mode: 'bank', agentId: 'yaba-1', wallet: fresh('K'), ngn: 9000, bank } });
+    check(r.status === 200, 'auto-complete frees the bond for new orders', r.body);
+  }
+} else skip('auto-complete', 'AUTO_COMPLETE_MS not set to a short test value');
+
+// ── a busy wallet: a payment is still found after many newer transactions (the old scan only saw the last 50)
+await sleep(3200);
+r = await call('/api/orders', { method: 'POST', json: { kind: 'topup', mode: 'cash', agentId: 'yaba-1', wallet: fresh('M'), ngn: 1500 } });
+const busy = r.body.order;
+await send(AGENT_HTLC, fresh('M'), busy.nim, busy.memo, AGENT);
+for (let i = 0; i < 120; i++) await send(HTLC1, fresh('M'), 1, `noise ${i}`, undefined);
+r = await call(`/api/orders/${busy.id}`, { method: 'POST', json: { action: 'sync' } });
+check(r.body.order?.status === 'paid' && r.body.order.tx?.nim === busy.nim, 'payment is found behind 120 newer transactions', r.body.order);
+
+// ── NimPoint resolves a reported order
+if (ADMIN) {
+  r = await call('/api/orders', { method: 'POST', json: { kind: 'cashout', mode: 'cash', agentId: 'yaba-1', wallet: fresh('L'), ngn: 1000 } });
+  const o6 = r.body.order;
+  await send(HTLC1, AGENT, o6.nim, o6.memo, fresh('L'));
+  await call(`/api/orders/${o6.id}`, { method: 'POST', json: { action: 'sync' } });
+  r = await call(`/api/orders/${o6.id}`, { method: 'POST', json: { action: 'dispute', note: 'never paid' } });
+  check(r.body.order?.status === 'disputed', 'paid order reported', r.body);
+  r = await call('/api/admin', { method: 'POST', admin: 'wrong-admin-key', json: { action: 'resolve', id: o6.id, outcome: 'refunded' } });
+  check(r.status === 401, 'admin actions need the admin key', r.body);
+  // A refund is only believed once the chain shows it.
+  const paid6 = (await call(`/api/orders/${o6.id}`)).body.order.tx;
+  const bondOut = 'NIMPOINT-BONDOUT-YABA-1';
+  const refundFrom = BOND ?? AGENT;
+  r = await call('/api/admin', { method: 'POST', admin: ADMIN, json: { action: 'resolve', id: o6.id, outcome: 'refunded' } });
+  check(r.status === 400 && /hash/.test(r.body.error), 'a refund needs the refund transaction', r.body);
+  const fakeRefund = await send(refundFrom, fresh('L'), paid6.nim, 'sorry', undefined);
+  r = await call('/api/admin', { method: 'POST', admin: ADMIN, json: { action: 'resolve', id: o6.id, outcome: 'refunded', refundHash: fakeRefund } });
+  check(r.status === 400 && /memo/.test(r.body.error), 'a refund without the BONDOUT memo is refused', r.body);
+  const shortRefund = await send(refundFrom, fresh('L'), paid6.nim / 2, bondOut, undefined);
+  r = await call('/api/admin', { method: 'POST', admin: ADMIN, json: { action: 'resolve', id: o6.id, outcome: 'refunded', refundHash: shortRefund } });
+  check(r.status === 400 && /customer sent/.test(r.body.error), 'a refund smaller than the payment is refused', r.body);
+  const elsewhere = await send(refundFrom, USER2, paid6.nim, bondOut, undefined);
+  r = await call('/api/admin', { method: 'POST', admin: ADMIN, json: { action: 'resolve', id: o6.id, outcome: 'refunded', refundHash: elsewhere } });
+  check(r.status === 400 && /customer's wallet/.test(r.body.error), 'a refund to someone else is refused', r.body);
+  if (BOND) {
+    const notBond = await send(AGENT, fresh('L'), paid6.nim, bondOut, undefined);
+    r = await call('/api/admin', { method: 'POST', admin: ADMIN, json: { action: 'resolve', id: o6.id, outcome: 'refunded', refundHash: notBond } });
+    check(r.status === 400 && /bond wallet/.test(r.body.error), 'a refund must come from the bond wallet', r.body);
+  }
+  const bondBefore = BOND ? (await call('/api/agents')).body.agents[0].bond.nim : 0;
+  const refund = await send(refundFrom, fresh('L'), paid6.nim, bondOut, undefined);
+  r = await call('/api/admin', { method: 'POST', admin: ADMIN, json: { action: 'resolve', id: o6.id, outcome: 'refunded', note: 'Refund tx sent', refundHash: refund } });
+  check(
+    r.body.order?.status === 'completed' && r.body.order.resolution === 'refunded' && r.body.order.refundTx?.hash === refund,
+    'reported order resolved as refunded, proven on-chain',
+    r.body,
+  );
+  if (BOND) {
+    await sleep(15_500); // the bond book is cached for 15s
+    const bondAfter = (await call('/api/agents')).body.agents[0].bond.nim;
+    check(bondAfter < bondBefore, "the refund comes off the agent's bond on-chain", { bondBefore, bondAfter });
+  }
+  r = await call('/api/admin', { method: 'POST', admin: ADMIN, json: { action: 'resolve', id: o6.id, outcome: 'agent_paid' } });
+  check(r.status === 400, 'an order is resolved once');
+} else skip('dispute resolution', 'ADMIN_KEY not set');
+
+// ── registration: a wallet proves it is real by signing
+function addressOf(pub) {
+  const h = blake2b(pub, { dkLen: 32 }).subarray(0, 20);
+  let bits = '';
+  for (const b of h) bits += b.toString(2).padStart(8, '0');
+  let body = '';
+  for (let i = 0; i < 160; i += 5) body += BASE32[parseInt(bits.slice(i, i + 5), 2)];
+  let mod = 0;
+  for (const c of body + 'NQ00') for (const d of c >= 'A' ? String(c.charCodeAt(0) - 55) : c) mod = (mod * 10 + Number(d)) % 97;
+  return `NQ${String(98 - mod).padStart(2, '0')}${body}`;
+}
+function registration() {
+  const { publicKey, privateKey } = generateKeyPairSync('ed25519');
+  const pub = publicKey.export({ format: 'der', type: 'spki' }).subarray(-32);
+  const wallet = addressOf(pub);
+  const message = `NimPoint registration: I own ${wallet.replace(/(.{4})(?=.)/g, '$1 ')}.`;
+  const bytes = Buffer.from(message, 'utf8');
+  const hash = createHash('sha256').update(Buffer.concat([Buffer.from('\x16Nimiq Signed Message:\n' + bytes.length, 'utf8'), bytes])).digest();
+  return { wallet, message, publicKey: pub.toString('hex'), signature: sign(null, hash, privateKey).toString('hex') };
+}
+const reg = registration();
+const before = (await call('/api/users')).body.count;
+r = await call('/api/users', { method: 'POST', json: reg });
+check(r.status === 200 && r.body.registered && r.body.count === before + 1, 'wallet registers with its own signature', r.body);
+r = await call('/api/users', { method: 'POST', json: reg });
+check(r.body.count === before + 1, 'registering twice counts once', r.body);
+r = await call(`/api/users?wallet=${encodeURIComponent(reg.wallet)}`);
+check(r.body.registered === true, 'registered wallet is recognised');
+r = await call('/api/users?list=1');
+const listed = r.body.users?.find((u) => u.wallet === reg.wallet);
+check(r.body.count === before + 1 && listed?.signature === reg.signature && listed?.publicKey === reg.publicKey && listed?.message === reg.message, 'public list carries the signed proof', listed);
+r = await call('/api/users', { method: 'POST', json: { ...reg, wallet: USER1, message: 'NimPoint registration: I own NQ22 BBBB BBBB BBBB BBBB BBBB BBBB BBBB BBBB.' } });
+check(r.status === 400, "cannot register someone else's wallet", r.body);
+const other = registration();
+r = await call('/api/users', { method: 'POST', json: { ...reg, signature: other.signature } });
+check(r.status === 400, 'a bad signature is refused', r.body);
+r = await call('/api/proof');
+check(r.body.registeredUsers === before + 1, 'proof page counts registered wallets', r.body.registeredUsers);
+
+// ── test network: works, clearly separate, never counted as real usage
+if (RPC_TEST) {
+  const realOrders = r.body.ledger.orders;
+  const TESTER = fresh('M');
+  r = await call('/api/orders', { method: 'POST', json: { kind: 'cashout', mode: 'cash', agentId: 'yaba-1', wallet: TESTER, ngn: 3000, network: 'testnet' } });
+  check(r.status === 200 && r.body.order.network === 'testnet', 'test-network order is created and labelled', r.body);
+  const o7 = r.body.order;
+  await send(HTLC1, AGENT, o7.nim, o7.memo, TESTER);
+  r = await call(`/api/orders/${o7.id}`, { method: 'POST', json: { action: 'sync' } });
+  check(r.body.order.status === 'awaiting_payment', 'a mainnet payment does not pay a test-network order', r.body.order);
+  await send(HTLC1, AGENT, o7.nim, o7.memo, TESTER, RPC_TEST);
+  r = await call(`/api/orders/${o7.id}`, { method: 'POST', json: { action: 'sync' } });
+  check(r.body.order.status === 'paid', 'test-network payment is found on the test network', r.body.order);
+  // The proof page is cached for a minute; a new registration refreshes it.
+  await call('/api/users', { method: 'POST', json: other });
+  r = await call('/api/proof');
+  check(r.body.ledger.orders === realOrders && r.body.otherNetworkOrders === 1, 'test orders are not counted as real usage', r.body.ledger);
+  r = await call('/api/proof?network=testnet');
+  check(r.body.network === 'testnet' && r.body.ledger.orders === 1, 'test orders are listed on their own page', r.body.ledger);
+} else skip('test network', 'RPC_TEST not set');
 
 console.log(`\nAll ${passed} checks passed.`);

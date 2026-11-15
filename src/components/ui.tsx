@@ -8,9 +8,9 @@ import { type ReactNode, useEffect, useState } from 'react';
 const cx = (...c: (string | false | null | undefined)[]) => c.filter(Boolean).join(' ');
 export { cx };
 
-export function Wordmark({ className = '' }: { className?: string }) {
+export function Wordmark({ className = '', href = '/app' }: { className?: string; href?: string }) {
   return (
-    <Link href="/" className={cx('flex items-center gap-2', className)} aria-label="NimPoint home">
+    <Link href={href} className={cx('flex items-center gap-2', className)} aria-label="NimPoint home">
       <LogoMark />
       <span className="text-[17px] font-semibold tracking-[-0.02em]">
         Nim<span className="font-serif text-[20px] font-normal italic tracking-normal">Point</span>

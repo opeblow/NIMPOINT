@@ -2,9 +2,12 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { getHostNetwork, init, NimiqProviderError, type NimiqProvider } from '@nimiq/mini-app-sdk';
-import { LUNA_PER_NIM } from './config';
+import { LUNA_PER_NIM, type Network } from './config';
 
 export type WalletStatus = 'connecting' | 'ready' | 'outside' | 'denied';
+
+/** The Nimiq network this Nimiq Pay is on. Outside Nimiq Pay, and on old versions, that is mainnet. */
+export const hostNetwork = (): Network => (typeof window !== 'undefined' && getHostNetwork() === 'testnet' ? 'testnet' : 'mainnet');
 
 let providerPromise: Promise<NimiqProvider | null> | null = null;
 
@@ -20,7 +23,7 @@ export interface WalletState {
   address: string | null;
   /** Spendable NIM (wallet + current HTLC), or null if unknown. */
   balance: number | null;
-  network: string | undefined;
+  network: Network;
   refresh: () => Promise<void>;
 }
 
@@ -41,6 +44,8 @@ export function useWallet(): WalletState {
       setStatus('outside');
       return;
     }
+    // Asking again (after a "no") shows the spinner while Nimiq Pay prompts.
+    setStatus('connecting');
     try {
       const accounts = await p.listAccounts();
       setAddress(accounts[0] ?? null);
@@ -66,7 +71,7 @@ export function useWallet(): WalletState {
     return () => off?.();
   }, [load]);
 
-  return { status, address, balance, network: typeof window !== 'undefined' ? getHostNetwork() : undefined, refresh: load };
+  return { status, address, balance, network: hostNetwork(), refresh: load };
 }
 
 /** Friendly text for anything Nimiq Pay can throw at us. */
@@ -81,10 +86,21 @@ export function walletErrorMessage(err: unknown) {
   return (err as Error)?.message || 'Nimiq Pay could not complete the payment.';
 }
 
+const NOT_IN_NIMIQ_PAY = 'Open NimPoint inside Nimiq Pay to pay.';
+
+/** True only when Nimiq Pay is certain no NIM left the wallet. Anything else might have been sent. */
+export function definitelyNotSent(err: unknown) {
+  if (NimiqProviderError.is(err)) {
+    const t = err.type.toUpperCase();
+    return ['REJECT', 'DENIED', 'CANCEL', 'INSUFFICIENT', 'BALANCE'].some((w) => t.includes(w));
+  }
+  return (err as Error)?.message === NOT_IN_NIMIQ_PAY;
+}
+
 /** Ask Nimiq Pay to send NIM with our order memo. Returns whatever the host returns (hash or serialized tx). */
 export async function payWithMemo(recipient: string, nim: number, memo: string) {
   const p = await getProvider();
-  if (!p) throw new Error('Open NimPoint inside Nimiq Pay to pay.');
+  if (!p) throw new Error(NOT_IN_NIMIQ_PAY);
   return p.sendBasicTransactionWithData({
     recipient: recipient.replace(/\s+/g, ''),
     value: Math.round(nim * LUNA_PER_NIM),
