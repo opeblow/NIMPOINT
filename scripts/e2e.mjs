@@ -435,7 +435,6 @@ check(r.body.registeredUsers === before + 2, 'testnet proof view shows the share
 
 // ── test network: works, clearly separate, never counted as real usage
 if (RPC_TEST) {
-  const realOrders = r.body.ledger.orders;
   const TESTER = fresh('M');
   r = await call('/api/orders', { method: 'POST', json: { kind: 'cashout', mode: 'cash', agentId: 'yaba-1', wallet: TESTER, ngn: 3000, network: 'testnet' } });
   check(r.status === 200 && r.body.order.network === 'testnet', 'test-network order is created and labelled', r.body);
@@ -449,7 +448,7 @@ if (RPC_TEST) {
   // The proof page is cached for a minute; a new registration refreshes it.
   await call('/api/users', { method: 'POST', json: other });
   r = await call('/api/proof');
-  check(r.body.ledger.orders === realOrders && r.body.otherNetworkOrders === 1, 'test orders are not counted as real usage', r.body.ledger);
+  check(!r.body.ledger.entries.some((entry) => entry.id === o7.id) && r.body.otherNetworkOrders === 1, 'test orders are not counted as real usage', r.body.ledger);
   r = await call('/api/proof?network=testnet');
   check(r.body.network === 'testnet' && r.body.ledger.orders === 1, 'test orders are listed on their own page', r.body.ledger);
 } else skip('test network', 'RPC_TEST not set');
