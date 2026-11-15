@@ -42,7 +42,7 @@ Cash out NIM to any Nigerian bank, or walk up to a NimPoint agent and leave with
 **Trust and proof**
 
 9. [Nimiq Pay integration](#nimiq-pay-integration)
-10. [Verifiable usage: the proof page](#verifiable-usage-the-proof-page)
+10. [Live registered-user count + proof](#verifiable-usage-the-proof-page)
 11. [Safety model](#safety-model)
     - [Agent bonds](#agent-bonds)
 12. [Limits and open risks](#limits-and-open-risks)
