@@ -156,9 +156,7 @@ export interface Proof {
   network: Network;
   /** Wallets that proved ownership with a signature. */
   registeredUsers: number;
-  /** Unique registrations on each network; a wallet can appear in both. */
-  registeredUsersByNetwork: Record<Network, number>;
-  /** Each registered wallet on the selected network and when it registered, oldest first. */
+  /** Unique registered wallets across both networks, oldest first. */
   registrations: { wallet: string; at: number }[];
   /** Settled orders on the other network, so the page can point to them. */
   otherNetworkOrders: number;

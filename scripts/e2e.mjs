@@ -404,8 +404,6 @@ function registration() {
 }
 const reg = registration();
 const before = (await call('/api/users')).body.count;
-const mainnetBefore = (await call('/api/proof?network=mainnet')).body.registeredUsersByNetwork?.mainnet ?? 0;
-const testnetBefore = (await call('/api/proof?network=testnet')).body.registeredUsersByNetwork?.testnet ?? 0;
 r = await call('/api/users', { method: 'POST', json: reg });
 check(r.status === 200 && r.body.registered && r.body.count === before + 1, 'wallet registers with its own signature', r.body);
 r = await call('/api/users', { method: 'POST', json: reg });
@@ -421,7 +419,7 @@ const other = registration();
 r = await call('/api/users', { method: 'POST', json: { ...reg, signature: other.signature } });
 check(r.status === 400, 'a bad signature is refused', r.body);
 r = await call('/api/proof');
-check(r.body.registeredUsers === before + 1 && r.body.registeredUsersByNetwork?.mainnet === mainnetBefore + 1 && r.body.registeredUsersByNetwork?.testnet === testnetBefore, 'proof page counts registered wallets on each network', r.body);
+check(r.body.registeredUsers === before + 1 && r.body.registrations?.length === before + 1, 'proof page counts registered wallets across both networks', r.body);
 const testnetRegistration = registration();
 r = await call('/api/users', { method: 'POST', json: { ...testnetRegistration, network: 'testnet' } });
 check(r.body.count === before + 2, 'testnet registrations add to the shared count', r.body.count);
@@ -431,9 +429,9 @@ check(r.body.count === before + 2 && r.body.users.filter((u) => u.wallet === reg
 r = await call(`/api/users?wallet=${encodeURIComponent(testnetRegistration.wallet)}&network=mainnet`);
 check(r.body.registered && r.body.count === before + 2, 'testnet registration is visible in the mainnet view', r.body);
 r = await call('/api/proof?network=mainnet');
-check(r.body.registeredUsers === before + 2 && r.body.registeredUsersByNetwork?.mainnet === mainnetBefore + 1 && r.body.registeredUsersByNetwork?.testnet === testnetBefore + 2, 'mainnet proof shows per-network and shared registration counts', r.body);
+check(r.body.registeredUsers === before + 2 && r.body.registrations?.length === before + 2, 'mainnet proof shows the combined registration count', r.body);
 r = await call('/api/proof?network=testnet');
-check(r.body.registeredUsers === before + 2 && r.body.registeredUsersByNetwork?.mainnet === mainnetBefore + 1 && r.body.registeredUsersByNetwork?.testnet === testnetBefore + 2, 'testnet proof shows per-network and shared registration counts', r.body);
+check(r.body.registeredUsers === before + 2 && r.body.registrations?.length === before + 2, 'testnet proof shows the same combined registration count', r.body);
 
 // ── test network: works, clearly separate, never counted as real usage
 if (RPC_TEST) {

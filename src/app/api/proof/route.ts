@@ -47,7 +47,7 @@ export async function GET(req: Request) {
     const net = asNetwork(new URL(req.url).searchParams.get('network'));
     const cacheKey = net === 'mainnet' ? 'proof' : `proof:${net}`;
     const cached = await store.get<Proof>(cacheKey);
-    if (cached?.network === net && cached.registeredUsersByNetwork && Date.now() - cached.generatedAt < 60_000) return ok(cached);
+    if (cached?.network === net && cached.registeredUsers === cached.registrations.length && Date.now() - cached.generatedAt < 60_000) return ok(cached);
 
     const everything = await Promise.all((await allOrders()).filter((o) => o.tx && settled.has(o.status)).map(healNetwork));
     const orders = everything.filter((o) => netOf(o) === net);
@@ -68,11 +68,7 @@ export async function GET(req: Request) {
       generatedAt: Date.now(),
       network: net,
       registeredUsers: registrations.all.length,
-      registeredUsersByNetwork: {
-        mainnet: registrations.byNetwork.mainnet.length,
-        testnet: registrations.byNetwork.testnet.length,
-      },
-      registrations: registrations.byNetwork[net].map((u) => ({ wallet: u.wallet, at: u.at })),
+      registrations: registrations.all.map((u) => ({ wallet: u.wallet, at: u.at })),
       otherNetworkOrders: everything.length - orders.length,
       bonds: await bonds(net),
       bondNetwork: bondConfig()?.network ?? null,
