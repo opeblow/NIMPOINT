@@ -208,7 +208,7 @@ NimPoint uses the official [`@nimiq/mini-app-sdk`](https://www.npmjs.com/package
 
 ## Verifiable usage: the proof page
 
-Real usage should be checkable, not claimed. **[Judges: see the live registered-user count and public proof](https://nimpoint.vercel.app/proof).** The registration total counts unique wallets across mainnet and testnet and appears in either network view; it is not evidence of a mainnet payment.
+Real usage should be checkable, not claimed. **[Judges: see the live registered-user count and public proof](https://nimpoint.vercel.app/proof).** The page shows separate mainnet and testnet registration counts plus a deduplicated total of unique wallets across both; it is not evidence of a mainnet payment.
 
 The page shows three independently checkable signals:
 
@@ -216,7 +216,7 @@ The page shows three independently checkable signals:
 2. **Ledger:** unique wallets, settled orders, Naira moved and average rating, plus a per-day chart and **every settled order with its transaction link** on [nimiq.watch](https://nimiq.watch).
 3. **Chain-only:** the server scans each agent's address for incoming payments whose memo matches `^NIMPOINT-[2-9A-HJKMNP-Z]{8}$`, resolves each Nimiq Pay HTLC back to the owner wallet, and counts distinct owners.
 
-The page has two tabs. The **registration total** is global across both networks and deduplicated by wallet. Ledger and chain activity are scoped to the selected network: **Real money (mainnet)** is the default, while **Test network** lists testnet orders and payments separately, never as mainnet activity.
+The page has two tabs. Registration counts and the registration chart are scoped to each network, with the combined total deduplicated by wallet. Ledger and chain activity are also scoped to the selected network: **Real money (mainnet)** is the default, while **Test network** lists testnet orders and payments separately, never as mainnet activity.
 
 Anyone, including the Nimiq team, can rerun the chain count without trusting our server:
 

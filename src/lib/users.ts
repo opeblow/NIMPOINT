@@ -44,6 +44,19 @@ export interface RegisteredUser {
   signature?: string;
 }
 
+export async function registrationSnapshot() {
+  const [mainnet, testnet] = await Promise.all([listUsers('mainnet'), listUsers('testnet')]);
+  const byWallet = new Map<string, RegisteredUser>();
+  for (const user of [...mainnet, ...testnet]) {
+    const key = normalizeAddress(user.wallet);
+    const existing = byWallet.get(key);
+    if (!existing || ((!existing.publicKey || !existing.signature) && user.publicKey && user.signature)) {
+      byWallet.set(key, existing ? { ...user, at: Math.min(existing.at, user.at) } : user);
+    }
+  }
+  return { all: [...byWallet.values()].sort((a, b) => a.at - b.at), byNetwork: { mainnet, testnet } };
+}
+
 /** Every registered wallet with its signed proof, oldest first. Public by design: it is what makes the count checkable. */
 export async function listUsers(net: Network): Promise<RegisteredUser[]> {
   const wallets = await store.smembers(K.all(net));
@@ -65,17 +78,7 @@ export async function listUsers(net: Network): Promise<RegisteredUser[]> {
 }
 
 export async function listAllUsers(): Promise<RegisteredUser[]> {
-  const byWallet = new Map<string, RegisteredUser>();
-  for (const net of ['mainnet', 'testnet'] as const) {
-    for (const user of await listUsers(net)) {
-      const key = normalizeAddress(user.wallet);
-      const existing = byWallet.get(key);
-      if (!existing || ((!existing.publicKey || !existing.signature) && user.publicKey && user.signature)) {
-        byWallet.set(key, existing ? { ...user, at: Math.min(existing.at, user.at) } : user);
-      }
-    }
-  }
-  return [...byWallet.values()].sort((a, b) => a.at - b.at);
+  return (await registrationSnapshot()).all;
 }
 
 export const registeredCount = async () => (await listAllUsers()).length;

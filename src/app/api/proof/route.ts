@@ -6,7 +6,7 @@ import { ownerOf, sameAddress, transactionHistory } from '@/lib/nimiq-rpc';
 import { agentBond, allOrders, healNetwork, netOf } from '@/lib/orders';
 import { store } from '@/lib/store';
 import type { Proof } from '@/lib/types';
-import { listAllUsers } from '@/lib/users';
+import { registrationSnapshot } from '@/lib/users';
 
 export const dynamic = 'force-dynamic';
 
@@ -47,7 +47,7 @@ export async function GET(req: Request) {
     const net = asNetwork(new URL(req.url).searchParams.get('network'));
     const cacheKey = net === 'mainnet' ? 'proof' : `proof:${net}`;
     const cached = await store.get<Proof>(cacheKey);
-    if (cached?.network === net && Date.now() - cached.generatedAt < 60_000) return ok(cached);
+    if (cached?.network === net && cached.registeredUsersByNetwork && Date.now() - cached.generatedAt < 60_000) return ok(cached);
 
     const everything = await Promise.all((await allOrders()).filter((o) => o.tx && settled.has(o.status)).map(healNetwork));
     const orders = everything.filter((o) => netOf(o) === net);
@@ -63,12 +63,16 @@ export async function GET(req: Request) {
       byDay.set(day, d);
     }
 
-    const users = await listAllUsers();
+    const registrations = await registrationSnapshot();
     const proof: Proof = {
       generatedAt: Date.now(),
       network: net,
-      registeredUsers: users.length,
-      registrations: users.map((u) => ({ wallet: u.wallet, at: u.at })),
+      registeredUsers: registrations.all.length,
+      registeredUsersByNetwork: {
+        mainnet: registrations.byNetwork.mainnet.length,
+        testnet: registrations.byNetwork.testnet.length,
+      },
+      registrations: registrations.byNetwork[net].map((u) => ({ wallet: u.wallet, at: u.at })),
       otherNetworkOrders: everything.length - orders.length,
       bonds: await bonds(net),
       bondNetwork: bondConfig()?.network ?? null,

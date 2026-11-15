@@ -84,7 +84,7 @@ export default function ProofPage() {
         <>
           <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3">
             <Big label="Wallets that traded" value={String(l.uniqueWallets)} accent />
-            <Big label="Registered users" value={String(proof.registeredUsers)} />
+            <Big label={`Registered · ${net}`} value={String(proof.registeredUsersByNetwork[net])} />
             <Big label="Settled orders" value={String(l.orders)} />
             <Big label="Naira moved" value={f.ngn(l.volumeNgn)} />
             <Big label="Avg rating" value={l.ratingAvg ? `${l.ratingAvg.toFixed(1)} ★` : '—'} />
@@ -139,12 +139,14 @@ export default function ProofPage() {
           <Card className="mt-4 p-5">
             <p className="text-[17px] font-semibold tracking-[-0.01em]">Registered users</p>
             <p className="mt-1 text-[14px] leading-snug text-ink-2">
-              <b className="text-ink tabular">{proof.registeredUsers}</b> {proof.registeredUsers === 1 ? 'wallet has' : 'wallets have'} registered across mainnet and testnet. We count each wallet once;
-              registration does not mean it made a mainnet payment. Each wallet signed a fixed sentence with its own Nimiq Pay key. No payment is needed.
+              <b className="text-ink tabular">{proof.registeredUsersByNetwork.mainnet}</b> on mainnet and{' '}
+              <b className="text-ink tabular">{proof.registeredUsersByNetwork.testnet}</b> on testnet. There are{' '}
+              <b className="text-ink tabular">{proof.registeredUsers}</b> unique wallets across both; a wallet registered on both networks is counted once in that total.
+              {' '}Registration does not mean a wallet made a mainnet payment. Each wallet signed a fixed sentence with its own Nimiq Pay key. No payment is needed.
             </p>
             {regDays.length > 0 && (
               <>
-                <p className="mt-4 text-[13px] font-medium uppercase tracking-[0.08em] text-ink-3">New registrations per day</p>
+                <p className="mt-4 text-[13px] font-medium uppercase tracking-[0.08em] text-ink-3">New {net} registrations per day</p>
                 <div className="mt-3 flex h-28 items-end gap-1.5">
                   {regDays.slice(-21).map(([day, n]) => (
                     <div key={day} className="flex h-full flex-1 flex-col items-center justify-end gap-1">
