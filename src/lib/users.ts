@@ -25,7 +25,13 @@ export async function registerUser(input: { wallet: string; network: Network; me
   }
 }
 
-export const isRegistered = async (wallet: string, net: Network) => (await store.get<unknown>(K.user(net, wallet))) !== null;
+export async function isRegistered(wallet: string, _net: Network) {
+  const [mainnet, testnet] = await Promise.all([
+    store.get<unknown>(K.user('mainnet', wallet)),
+    store.get<unknown>(K.user('testnet', wallet)),
+  ]);
+  return mainnet !== null || testnet !== null;
+}
 
 export interface RegisteredUser {
   wallet: string;
@@ -57,4 +63,19 @@ export async function listUsers(net: Network): Promise<RegisteredUser[]> {
   );
   return rows.sort((a, b) => a.at - b.at);
 }
-export const registeredCount = async (net: Network) => (await store.smembers(K.all(net))).length;
+
+export async function listAllUsers(): Promise<RegisteredUser[]> {
+  const byWallet = new Map<string, RegisteredUser>();
+  for (const net of ['mainnet', 'testnet'] as const) {
+    for (const user of await listUsers(net)) {
+      const key = normalizeAddress(user.wallet);
+      const existing = byWallet.get(key);
+      if (!existing || ((!existing.publicKey || !existing.signature) && user.publicKey && user.signature)) {
+        byWallet.set(key, existing ? { ...user, at: Math.min(existing.at, user.at) } : user);
+      }
+    }
+  }
+  return [...byWallet.values()].sort((a, b) => a.at - b.at);
+}
+
+export const registeredCount = async () => (await listAllUsers()).length;

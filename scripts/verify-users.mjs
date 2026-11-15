@@ -3,12 +3,11 @@
 // Downloads the public signed list and re-checks every entry on your own machine:
 //   1. the public key really hashes to that Nimiq address, and
 //   2. that key really signed "NimPoint registration: I own <address>."
-// Usage: node scripts/verify-users.mjs [mainnet|testnet] [https://nimpoint.vercel.app]
+// Usage: node scripts/verify-users.mjs [https://nimpoint.vercel.app]
 import { createHash, createPublicKey, verify } from 'node:crypto';
 import { blake2b } from '@noble/hashes/blake2b';
 
-const network = process.argv[2] === 'testnet' ? 'testnet' : 'mainnet';
-const base = process.argv[3] ?? 'https://nimpoint.vercel.app';
+const base = process.argv[2] ?? 'https://nimpoint.vercel.app';
 const SPKI = Buffer.from('302a300506032b6570032100', 'hex');
 const BASE32 = '0123456789ABCDEFGHJKLMNPQRSTUVXY';
 const norm = (a) => a.replace(/\s+/g, '').toUpperCase();
@@ -33,7 +32,7 @@ function signedBy(message, publicKeyHex, signatureHex) {
   return verify(null, createHash('sha256').update(prefixed).digest(), key, sig) || verify(null, prefixed, key, sig);
 }
 
-const res = await fetch(`${base}/api/users?list=1&network=${network}`);
+const res = await fetch(`${base}/api/users?list=1`);
 if (!res.ok) throw new Error(`Could not load the list (${res.status}).`);
 const { users } = await res.json();
 let good = 0;
@@ -57,5 +56,5 @@ for (const u of users) {
   if (okay) good++;
   console.log(`${okay ? 'OK  ' : 'FAIL'}  ${spaced(u.wallet)}  ${u.at ? new Date(u.at).toISOString() : ''}${okay ? '' : '  (' + why + ')'}`);
 }
-console.log(`\nListed on ${network}: ${users.length}`);
+console.log(`\nListed across both networks: ${users.length}`);
 console.log(`Verified signatures: ${good}`);

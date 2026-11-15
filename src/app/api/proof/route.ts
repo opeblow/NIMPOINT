@@ -6,7 +6,7 @@ import { ownerOf, sameAddress, transactionHistory } from '@/lib/nimiq-rpc';
 import { agentBond, allOrders, healNetwork, netOf } from '@/lib/orders';
 import { store } from '@/lib/store';
 import type { Proof } from '@/lib/types';
-import { listUsers } from '@/lib/users';
+import { listAllUsers } from '@/lib/users';
 
 export const dynamic = 'force-dynamic';
 
@@ -63,7 +63,7 @@ export async function GET(req: Request) {
       byDay.set(day, d);
     }
 
-    const users = await listUsers(net);
+    const users = await listAllUsers();
     const proof: Proof = {
       generatedAt: Date.now(),
       network: net,

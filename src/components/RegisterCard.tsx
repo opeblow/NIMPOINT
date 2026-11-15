@@ -31,7 +31,7 @@ export function RegisterCard({ wallet, network }: { wallet: string | null; netwo
         <svg viewBox="0 0 24 24" className="h-4 w-4 text-naira" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
           <path d="m5 12.5 4.5 4.5L19 7.5" />
         </svg>
-        Registered NimPoint user · {count} registered{network === 'testnet' ? ' on the test network' : ''}
+        Registered NimPoint user · {count} registered across both networks
       </p>
     );
 

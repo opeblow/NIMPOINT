@@ -420,6 +420,18 @@ r = await call('/api/users', { method: 'POST', json: { ...reg, signature: other.
 check(r.status === 400, 'a bad signature is refused', r.body);
 r = await call('/api/proof');
 check(r.body.registeredUsers === before + 1, 'proof page counts registered wallets', r.body.registeredUsers);
+const testnetRegistration = registration();
+r = await call('/api/users', { method: 'POST', json: { ...testnetRegistration, network: 'testnet' } });
+check(r.body.count === before + 2, 'testnet registrations add to the shared count', r.body.count);
+await call('/api/users', { method: 'POST', json: { ...reg, network: 'testnet' } });
+r = await call('/api/users?list=1&network=mainnet');
+check(r.body.count === before + 2 && r.body.users.filter((u) => u.wallet === reg.wallet).length === 1, 'a wallet registered on both networks counts once', r.body.count);
+r = await call(`/api/users?wallet=${encodeURIComponent(testnetRegistration.wallet)}&network=mainnet`);
+check(r.body.registered && r.body.count === before + 2, 'testnet registration is visible in the mainnet view', r.body);
+r = await call('/api/proof?network=mainnet');
+check(r.body.registeredUsers === before + 2, 'mainnet proof view shows the shared registration count', r.body.registeredUsers);
+r = await call('/api/proof?network=testnet');
+check(r.body.registeredUsers === before + 2, 'testnet proof view shows the shared registration count', r.body.registeredUsers);
 
 // ── test network: works, clearly separate, never counted as real usage
 if (RPC_TEST) {

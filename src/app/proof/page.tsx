@@ -139,8 +139,8 @@ export default function ProofPage() {
           <Card className="mt-4 p-5">
             <p className="text-[17px] font-semibold tracking-[-0.01em]">Registered users</p>
             <p className="mt-1 text-[14px] leading-snug text-ink-2">
-              <b className="text-ink tabular">{proof.registeredUsers}</b> {proof.registeredUsers === 1 ? 'wallet has' : 'wallets have'} registered. Each one signed a fixed sentence with its own
-              Nimiq Pay key, so it cannot be typed in or made up. No payment is needed to register.
+              <b className="text-ink tabular">{proof.registeredUsers}</b> {proof.registeredUsers === 1 ? 'wallet has' : 'wallets have'} registered across mainnet and testnet. We count each wallet once;
+              registration does not mean it made a mainnet payment. Each wallet signed a fixed sentence with its own Nimiq Pay key. No payment is needed.
             </p>
             {regDays.length > 0 && (
               <>
@@ -166,13 +166,13 @@ export default function ProofPage() {
             )}
             <p className="mt-4 text-[13px] leading-snug text-ink-2">
               Check it yourself:{' '}
-              <a href={`/api/users?list=1&network=${net}`} target="_blank" rel="noreferrer" className="font-medium text-ink underline underline-offset-2">
+              <a href="/api/users?list=1" target="_blank" rel="noreferrer" className="font-medium text-ink underline underline-offset-2">
                 the full signed list
               </a>{' '}
               has every wallet with its public key and signature.
             </p>
             <pre className="no-scrollbar mt-3 overflow-x-auto rounded-2xl bg-ink p-4 font-mono text-[12px] leading-relaxed text-paper/90">
-              {`node scripts/verify-users.mjs${net === 'testnet' ? ' testnet' : ''}`}
+              {'node scripts/verify-users.mjs'}
             </pre>
           </Card>
 

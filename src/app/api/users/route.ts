@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { asNetwork } from '@/lib/config';
 import { fail, handle, ok } from '@/lib/http';
 import { store } from '@/lib/store';
-import { isRegistered, listUsers, registeredCount, registerUser, RegistrationError } from '@/lib/users';
+import { isRegistered, listAllUsers, registeredCount, registerUser, RegistrationError } from '@/lib/users';
 
 export const dynamic = 'force-dynamic';
 
@@ -25,12 +25,12 @@ export async function GET(req: Request) {
     const q = new URL(req.url).searchParams;
     const net = asNetwork(q.get('network'));
     const wallet = q.get('wallet');
-    // The public, signed list: every registered wallet with the signature that proves it. See scripts/verify-users.mjs.
+    // The public, signed list covers unique wallets across both networks.
     if (q.get('list')) {
-      const users = await listUsers(net);
-      return ok({ network: net, count: users.length, users });
+      const users = await listAllUsers();
+      return ok({ network: 'all', count: users.length, users });
     }
-    return ok({ registered: wallet ? await isRegistered(nimiqAddress.parse(wallet), net) : false, count: await registeredCount(net) });
+    return ok({ registered: wallet ? await isRegistered(nimiqAddress.parse(wallet), net) : false, count: await registeredCount() });
   } catch (err) {
     return handle(err);
   }
@@ -41,8 +41,8 @@ export async function POST(req: Request) {
   try {
     const body = RegisterSchema.parse(await req.json());
     await registerUser(body);
-    await store.del(body.network === 'mainnet' ? 'proof' : `proof:${body.network}`);
-    return ok({ registered: true, count: await registeredCount(body.network) });
+    await Promise.all([store.del('proof'), store.del('proof:testnet')]);
+    return ok({ registered: true, count: await registeredCount() });
   } catch (err) {
     if (err instanceof RegistrationError) return fail(err.message, 400);
     return handle(err);
