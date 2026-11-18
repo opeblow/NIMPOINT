@@ -1,10 +1,9 @@
 'use client';
 
-import { motion } from 'motion/react';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
-import { EXPLORER_ADDRESS, EXPLORER_TX, MEMO_PREFIX, type Network } from '@/lib/config';
+import { EXPLORER_ADDRESS, type Network } from '@/lib/config';
 import * as f from '@/lib/format';
 import type { Proof } from '@/lib/types';
 import { Card, Notice, Spinner, Wordmark } from '@/components/ui';
@@ -33,7 +32,6 @@ export default function ProofPage() {
     };
   }, [net]);
 
-  const l = proof?.ledger;
   const regByDay = new Map<string, number>();
   for (const u of proof?.registrations ?? []) {
     const day = new Date(u.at).toISOString().slice(0, 10);
@@ -41,7 +39,6 @@ export default function ProofPage() {
   }
   const regDays = [...regByDay.entries()].sort();
   const maxReg = Math.max(1, ...regDays.map(([, n]) => n));
-  const maxDay =Math.max(1, ...(l?.daily.map((d) => d.wallets) ?? [1]));
 
   return (
     <div className="mx-auto min-h-[100dvh] w-full max-w-2xl px-4 pb-12 pt-[max(0.75rem,env(safe-area-inset-top))]">
@@ -53,11 +50,10 @@ export default function ProofPage() {
       </header>
 
       <h1 className="mt-6 text-[36px] font-semibold leading-[1.02] tracking-[-0.04em]">
-        Live proof, <span className="font-serif font-normal italic">on-chain.</span>
+        Live proof, <span className="font-serif font-normal italic">wallet-signed.</span>
       </h1>
       <p className="mt-3 max-w-lg text-[16px] leading-snug text-ink-2">
-        Every NimPoint payment carries a <span className="font-mono text-ink">{MEMO_PREFIX}-…</span> memo on the Nimiq blockchain. These numbers come from those
-        transactions. Click any one to check it on the explorer.
+        Registered wallets sign a short message with their Nimiq Pay key. View the wallets below and verify their signed registrations.
       </p>
 
       <div className="mt-5 inline-flex rounded-full bg-paper-2 p-1 text-[13px] font-medium" role="tablist" aria-label="Network">
@@ -69,7 +65,7 @@ export default function ProofPage() {
       </div>
       {net === 'testnet' && (
         <div className="mt-3">
-          <Notice tone="warn">These are test-network orders. Test NIM has no value, so nothing here counts as real usage.</Notice>
+          <Notice tone="warn">Test-network bond values use test NIM, which has no real value.</Notice>
         </div>
       )}
 
@@ -80,27 +76,15 @@ export default function ProofPage() {
         </div>
       )}
 
-      {proof && l && (
+      {proof && (
         <>
           <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3">
-            <Big label="Wallets that traded" value={String(l.uniqueWallets)} accent />
             <Big label="Registered users" value={String(proof.registeredUsers)} />
-            <Big label="Settled orders" value={String(l.orders)} />
-            <Big label="Naira moved" value={f.ngn(l.volumeNgn)} />
-            <Big label="Avg rating" value={l.ratingAvg ? `${l.ratingAvg.toFixed(1)} ★` : '—'} />
             <Big
               label="Agent bonds"
               value={proof.bonds.length ? f.ngn(proof.bonds.reduce((s, b) => s + b.ngn, 0)) : proof.bondNetwork && proof.bondNetwork !== net ? 'Testnet' : 'Off'}
             />
           </div>
-          <p className="mt-2 px-1 text-[12px] leading-snug text-ink-3">
-            A registered user is a wallet that signed a message to prove it exists. A wallet that traded has a payment on the Nimiq blockchain.
-          </p>
-          {l.teamOrders > 0 && (
-            <p className="mt-1 px-1 text-[12px] leading-snug text-ink-3">
-              {l.teamOrders} of these {l.orders} orders were paid by the NimPoint team&apos;s own wallets to test the live flow. They are real transactions, marked “team” below.
-            </p>
-          )}
           {proof.bondNetwork && proof.bondNetwork !== net && (
             <div className="mt-3">
               <Notice tone="warn">
@@ -108,11 +92,6 @@ export default function ProofPage() {
                 wallet is set for this network.
               </Notice>
             </div>
-          )}
-          {proof.otherNetworkOrders > 0 && (
-            <button onClick={() => setNet(net === 'mainnet' ? 'testnet' : 'mainnet')} className="mt-2 px-1 text-[13px] text-ink-2 underline underline-offset-2">
-              {net === 'mainnet' ? `${proof.otherNetworkOrders} more on the test network (not counted here)` : `${proof.otherNetworkOrders} real orders on mainnet`}
-            </button>
           )}
 
           {proof.bonds.length > 0 && (
@@ -176,73 +155,6 @@ export default function ProofPage() {
             </pre>
           </Card>
 
-          {l.daily.length > 0 && (
-            <Card className="mt-4 p-5">
-              <p className="text-[13px] font-medium uppercase tracking-[0.08em] text-ink-3">Unique wallets per day</p>
-              <div className="mt-4 flex h-32 items-end gap-1.5">
-                {l.daily.slice(-21).map((d, i) => (
-                  <div key={d.day} className="group relative flex h-full flex-1 flex-col justify-end">
-                    <motion.div
-                      initial={{ height: 0 }}
-                      animate={{ height: `${(d.wallets / maxDay) * 100}%` }}
-                      transition={{ delay: i * 0.03, duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
-                      className="min-h-[3px] rounded-t-md bg-ink"
-                    />
-                    <span className="pointer-events-none absolute -top-6 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-ink px-1.5 py-0.5 text-[11px] text-paper opacity-0 transition-opacity group-hover:opacity-100">
-                      {d.day.slice(5)} · {d.wallets}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </Card>
-          )}
-
-          <Card className="mt-4 p-5">
-            <p className="text-[17px] font-semibold tracking-[-0.01em]">Count it yourself</p>
-            <p className="mt-1 text-[14px] leading-snug text-ink-2">
-              Independently of our database, the chain shows <b className="text-ink tabular">{proof.chain.memoPayments}</b> NimPoint payments into agent wallets, from{' '}
-              <b className="text-ink tabular">{proof.chain.uniqueSenders}</b> distinct wallets (Nimiq Pay HTLCs resolved to their owners).
-            </p>
-            <ul className="mt-3 space-y-1.5 text-[13px]">
-              {proof.chain.agents.map((a) => (
-                <li key={a.address} className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="text-ink-2">{a.name}</span>
-                  <a href={EXPLORER_ADDRESS(a.address, net)} target="_blank" rel="noreferrer" className="font-mono text-ink underline underline-offset-2">
-                    {a.address}
-                  </a>
-                </li>
-              ))}
-            </ul>
-            <pre className="no-scrollbar mt-4 overflow-x-auto rounded-2xl bg-ink p-4 font-mono text-[12px] leading-relaxed text-paper/90">
-              {`node scripts/count-users.mjs ${proof.chain.agents.map((a) => `"${a.address}"`).join(' ') || '"NQ.."'}`}
-            </pre>
-          </Card>
-
-          <h2 className="mb-2 mt-8 px-1 text-[13px] font-medium uppercase tracking-[0.08em] text-ink-3">Every settled order</h2>
-          <Card className="overflow-hidden">
-            {l.entries.length === 0 ? (
-              <p className="p-5 text-[15px] text-ink-3">No settled orders yet. Be the first.</p>
-            ) : (
-              <ul className="divide-y divide-line/70">
-                {l.entries.map((e) => (
-                  <li key={e.id} className="flex items-center justify-between gap-3 px-4 py-3 text-[14px]">
-                    <div className="min-w-0">
-                      <p className="font-medium">
-                        {e.kind === 'cashout' ? 'Cash out' : 'Top up'} · {f.ngn(e.ngn)} <span className="text-ink-3">· {f.nim(e.nim)}</span>
-                        {e.team && <span className="ml-2 rounded-full bg-paper-2 px-2 py-0.5 text-[11px] font-medium text-ink-2">team</span>}
-                      </p>
-                      <p className="truncate font-mono text-[12px] text-ink-3">
-                        {f.shortAddress(e.wallet)} · {new Date(e.at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}
-                      </p>
-                    </div>
-                    <a href={EXPLORER_TX(e.tx, net)} target="_blank" rel="noreferrer" className="shrink-0 rounded-full bg-paper-2 px-3 py-1 font-mono text-[12px] text-ink">
-                      {e.tx.slice(0, 6)}↗
-                    </a>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </Card>
           <p className="mt-4 text-center text-[12px] text-ink-3">Updated {f.ago(proof.generatedAt)} · refreshes every 30 seconds</p>
         </>
       )}

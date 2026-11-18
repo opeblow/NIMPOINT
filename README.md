@@ -108,7 +108,7 @@ And against the published scoring:
 | --- | --- |
 | Functionality, reliability and usefulness (45) | Both directions work end to end. 98 automated checks cover double payments, short payments, closed apps, retries, disputes and bonds. Built on a habit Nigerians already have: the POS agent. |
 | Nimiq Pay and Nimiq integration (25) | Payments with data, balances, signed receipts, signed registration, HTLC resolution, host network and account-change events. NIM is the asset being traded and the collateral agents lock, not just a way to pay. |
-| Real usage (15) | A public [proof page](https://nimpoint.vercel.app/proof): the live count of unique wallets registered with a signature across both networks, plus settled orders and transactions. Order/payment activity stays separated by network; the shared registration count does not imply mainnet payments. |
+| Real usage (15) | A public [proof page](https://nimpoint.vercel.app/proof): the live count of unique wallets registered with a signature across both networks and their verifiable registrations. |
 | Design and UX (10) | A custom keypad, one decision per screen, plain-language errors, and a layout that fits a 360×640 Android phone. |
 
 ## Demo video
@@ -160,7 +160,7 @@ All screenshots were taken in an emulated phone viewport (390×844 @2x) against 
 | <img src="docs/screenshots/07-paid.png" width="240" /> | <img src="docs/screenshots/09-pickup.png" width="240" /> | <img src="docs/screenshots/08-done.png" width="240" /> |
 | **Verified on-chain.** Payment found by memo within seconds; the agent is alerted on Telegram. | **Cash pickup.** A secret 6-digit code, shown only on the customer's phone, that the agent types in before handing over cash. | **Done.** Confirm receipt (optionally signed by your wallet) and rate the agent. |
 | <img src="docs/screenshots/10-topup.png" width="240" /> | <img src="docs/screenshots/11-agent.png" width="240" /> | <img src="docs/screenshots/12-proof.png" width="240" /> |
-| **Top up.** Agent's account details with one-tap copy, and the exact reference to use. | **Agent console.** Online toggle, stats, to-do list and the printable NimPoint QR. | **Live proof.** Unique wallets, settled orders and every transaction, linked to the explorer. |
+| **Top up.** Agent's account details with one-tap copy, and the exact reference to use. | **Agent console.** Online toggle, stats, to-do list and the printable NimPoint QR. | **Live proof.** Registered wallet count and signed registration list. |
 
 <p align="center"><img src="docs/screenshots/small-android.png" width="220" /><br/><sub>Fits a 360×640 Android screen without scrolling.</sub></p>
 
@@ -210,15 +210,14 @@ NimPoint uses the official [`@nimiq/mini-app-sdk`](https://www.npmjs.com/package
 
 Real usage should be checkable, not claimed. **[Judges: see the live registered-user count and public proof](https://nimpoint.vercel.app/proof).** The page shows one deduplicated total of unique wallets registered across mainnet and testnet; it is not evidence of a mainnet payment.
 
-The page shows three independently checkable signals:
+The page shows signed registrations and agent bonds:
 
 1. **Registered users:** wallets that tapped "Register" and signed a fixed sentence with their Nimiq Pay key. The server checks the signature and that the key hashes to that address, so each one is a wallet somebody really holds.
-2. **Ledger:** unique wallets, settled orders, Naira moved and average rating, plus a per-day chart and **every settled order with its transaction link** on [nimiq.watch](https://nimiq.watch).
-3. **Chain-only:** the server scans each agent's address for incoming payments whose memo matches `^NIMPOINT-[2-9A-HJKMNP-Z]{8}$`, resolves each Nimiq Pay HTLC back to the owner wallet, and counts distinct owners.
+2. **Agent bonds:** public bond-wallet balances for the selected network, verifiable on the Nimiq explorer.
 
-The page has two tabs. Registration totals, chart and wallet list are combined across both networks, counting each wallet once. Ledger and chain activity remain scoped to the selected network: **Real money (mainnet)** is the default, while **Test network** lists testnet orders and payments separately, never as mainnet activity.
+The page has two tabs. Registration totals, chart and wallet list are combined across both networks, counting each wallet once. Bond values are scoped to the selected network: **Real money (mainnet)** is the default, while **Test network** shows testnet bond values separately.
 
-Anyone, including the Nimiq team, can rerun the chain count without trusting our server:
+Separately, anyone, including the Nimiq team, can rerun the chain count without trusting our server:
 
 ```bash
 node scripts/count-users.mjs "NQ.. agent address"
@@ -306,7 +305,7 @@ NimPoint is honest about what it cannot do yet. A reader deciding whether to tru
 | **Small orders only.** ₦20,000 per order at most. | Keeps the loss small if something goes wrong while the network of agents is young. | Each agent can also set a lower limit. |
 | **Rates move.** The rate is locked for 30 minutes, and the agent carries the price risk in that time. | NIM is volatile. | The agent's spread (1.5% by default) pays for it. |
 | **Regulation.** The Central Bank of Nigeria's *Regulations for the Operations of Non-Security Virtual Assets in Nigeria* took effect on 5 November 2026. They bring platform-facilitated P2P naira conversions under a licence and approval regime, with a 180-day window for existing providers, and expect platforms to reconcile the crypto leg of each trade with its naira leg. | Outside the app's control. Being non-custodial does not by itself exempt a P2P platform. | NimPoint is a competition prototype with small capped orders. Before any commercial launch the operator must obtain the approvals that apply. NimPoint links every NIM payment to its order and the agent's payout reference, but it cannot verify the naira leg itself (see the first row). |
-| **Real usage is still early.** | The app is new. | The proof page shows real-money and test-network activity on separate tabs, so nothing is overstated. |
+| **Real usage is still early.** | The app is new. | The proof page shows signed registrations and network-specific bond values. |
 
 ## Architecture
 
@@ -425,7 +424,7 @@ In a normal browser the app runs in **preview mode** and shows an "Open in Nimiq
    - Open `https://YOUR-APP/api/telegram/setup?key=ADMIN_KEY` once.
    - Message your bot `/start`. It replies with your chat ID → `AGENT_TELEGRAM_CHAT_ID`, redeploy.
 6. **Agent bonds (recommended):** create a wallet at [wallet.nimiq.com](https://wallet.nimiq.com), set `BOND_ADDRESS` to its address and redeploy. Each agent then opens `/agent` and taps **Add** on the bond card. Set `ADMIN_KEY` too, so you can close reported orders. To try bonds with test NIM first, use a test-network wallet and add `BOND_NETWORK=testnet`.
-   - **Team test orders:** list your own wallets in `TEAM_WALLETS` (comma-separated). Their orders stay on `/proof`, since they are real transactions, but are marked "team" so they are never mistaken for customers.
+   - **Team test orders:** list your own wallets in `TEAM_WALLETS` (comma-separated) to identify team-originated orders in API ledger data. They are not shown on the public proof page.
 7. **Open the URL in Nimiq Pay** and do a small test cash-out to yourself. Use a wallet other than the agent's.
 8. **Leave `NIMIQ_RPC_URL` unset** unless you run your own mainnet node. Test-network wallets are handled separately and automatically.
 9. **Print your QR:** open `/agent`, enter your key, tap "Show my NimPoint QR".
